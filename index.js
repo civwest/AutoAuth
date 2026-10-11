@@ -80,7 +80,7 @@ app.get("/login",(req,res)=>{
  if(req.session.owner)return res.redirect("/dashboard");
  res.send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AutoAuth Login</title><style>body{font:16px system-ui;background:#0d1117;color:#e6edf3}.box{max-width:420px;margin:12vh auto;padding:28px;background:#161b22;border:1px solid #30363d;border-radius:14px}input,button{width:100%;padding:12px;margin:8px 0 14px;box-sizing:border-box;border-radius:8px;border:1px solid #30363d}input{background:#0d1117;color:white}button{background:#7289da;color:white;border:0;cursor:pointer}</style><div class="box"><h1>AutoAuth</h1><p>Owner dashboard login</p>${req.query.error?"<p>Login failed. Check username and password.</p>":""}<form method="post"><label>Username</label><input name="username" autocomplete="username" required><label>Password</label><input type="password" name="password" autocomplete="current-password" required><button>Sign in</button></form></div>`);
 });
-app.post("/dashboard/login",async(req,res)=>{
+app.post("/login",async(req,res)=>{
  const ip=req.ip||"unknown", a=attempts.get(ip)||{n:0,until:0};
  if(a.until>Date.now())return res.status(429).send("Too many login attempts. Try again later.");
  const user=String(req.body.username||""),pw=String(req.body.password||"");
@@ -88,7 +88,7 @@ app.post("/dashboard/login",async(req,res)=>{
  if(!owner){a.n++;if(a.n>=8){a.n=0;a.until=Date.now()+15*60*1000;}attempts.set(ip,a);await log("dashboard_login_failed",{username:user.slice(0,80),ip});return res.redirect(303,"/login?error=1");}
  attempts.delete(ip);req.session.regenerate(async err=>{if(err)return res.status(500).send("Session error");req.session.owner=owner.user;await log("dashboard_login_success",{ip},owner.user);res.redirect(303,"/dashboard");});
 });
-app.post("/dashboard/logout",logged,async(req,res)=>{const owner=req.session.owner;await log("dashboard_logout",{},owner);req.session.destroy(()=>res.redirect("/dashboard/login"));});
+app.post("/dashboard/logout",logged,async(req,res)=>{const owner=req.session.owner;await log("dashboard_logout",{},owner);req.session.destroy(()=>res.redirect("/login"));});
 
 app.get("/dashboard",logged,async(req,res)=>{
  try{
