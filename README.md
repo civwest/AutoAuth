@@ -19,3 +19,9 @@ The owner password hashes are generated separately for this delivery. Copy them 
 
 The PostgreSQL schema is created automatically. Dashboard sessions are stored in Express's in-memory session store and will log out on service restarts; that is acceptable for a small personal dashboard. Audit logs and authorization records persist in PostgreSQL.
 \n\nDashboard server controls: the Servers table has a Leave server action for each guild; it asks for confirmation and records the action in Logs. Audit log actor IDs 1426813617394946068 and 1481562091520262236 are displayed as You (Civwest) and Jacob, respectively.\n
+
+## Session security and owner-only add commands
+- Dashboard sessions are stored in PostgreSQL, bound to the browser's User-Agent fingerprint, and expire after 2 hours. Refreshing or closing/reopening the page in the same browser keeps the session until it expires.
+- The `/addusers` and `/adduser user_id` commands require the Discord Administrator permission. `/adduser` adds one account that has already completed `/auth`. The commands also enforce Administrator permission at runtime.
+- The bot's application-install visibility must also be restricted in the Discord Developer Portal if you want to prevent other people from using an installation link to add the bot to their servers. Code-level command restrictions prevent others from running the bulk/single-user add commands.
+- New dependency `connect-pg-simple` uses the existing `DATABASE_URL`; no new database service is required.

@@ -11,11 +11,13 @@ const key = Buffer.from(process.env.TOKEN_ENCRYPTION_KEY, "hex");
 if (key.length !== 32) { console.error("TOKEN_ENCRYPTION_KEY must be 64 hex characters."); process.exit(1); }
 
 const app = express(), port = Number(process.env.PORT) || 10000;
+const pool = new Pool({ connectionString:process.env.DATABASE_URL, ssl:process.env.DATABASE_SSL==="disable" ? false : {rejectUnauthorized:false} });
+const PgSession = require("connect-pg-simple")(session);
 app.set("trust proxy", 1);
 app.use(express.urlencoded({ extended: false, limit: "20kb" }));
-app.use(session({ name:"autoauth.sid", secret:process.env.SESSION_SECRET, resave:false, saveUninitialized:false,
-  cookie:{ httpOnly:true, secure:"auto", sameSite:"lax", maxAge:8*60*60*1000 } }));
-const pool = new Pool({ connectionString:process.env.DATABASE_URL, ssl:process.env.DATABASE_SSL==="disable" ? false : {rejectUnauthorized:false} });
+app.use(session({ name:"autoauth.sid", secret:process.env.SESSION_SECRET, resave:false, saveUninitialized:false, rolling:false,
+  store:new PgSession({ pool, tableName:"dashboard_sessions", createTableIfMissing:true, ttl:2*60*60 }),
+  cookie:{ httpOnly:true, secure:"auto", sameSite:"lax", maxAge:2*60*60*1000 } }));
 const client = new Client({ intents:[GatewayIntentBits.Guilds] });
 const owners = [
  {user:process.env.DASHBOARD_OWNER1_USER, hash:process.env.DASHBOARD_OWNER1_PASSWORD_HASH},
@@ -54,7 +56,16 @@ function authUrl() {
  const state=crypto.randomBytes(32).toString("hex"); states.set(state,Date.now()+600000);
  const u=new URL("https://discord.com/oauth2/authorize"); u.searchParams.set("client_id",process.env.CLIENT_ID); u.searchParams.set("response_type","code"); u.searchParams.set("redirect_uri",process.env.REDIRECT_URI); u.searchParams.set("scope","identify guilds.join"); u.searchParams.set("state",state); return u.toString();
 }
-function logged(req,res,next) { if(!req.session.owner) return res.redirect("/login"); next(); }
+function deviceFingerprint(req) {
+ return crypto.createHash("sha256").update(String(req.get("user-agent")||"unknown")).digest("hex");
+}
+function logged(req,res,next) {
+ if(!req.session.owner) return res.redirect("/login");
+ if(!req.session.deviceFingerprint || !equal(req.session.deviceFingerprint,deviceFingerprint(req))) {
+   return req.session.destroy(()=>res.redirect("/login?expired=1"));
+ }
+ next();
+}
 function verifyOrigin(req,res,next) { const origin=req.get("origin"); if(origin && origin!==`${req.protocol}://${req.get("host")}`) return res.status(403).send("Invalid origin."); next(); }
 async function refresh(refreshToken) {
  const r=await fetch("https://discord.com/api/v10/oauth2/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:process.env.CLIENT_ID,client_secret:process.env.CLIENT_SECRET,grant_type:"refresh_token",refresh_token:refreshToken})});
@@ -62,7 +73,10 @@ async function refresh(refreshToken) {
 }
 async function register() {
  const cmds=[new SlashCommandBuilder().setName("auth").setDescription("Get your AutoAuth account-linking URL"),
- new SlashCommandBuilder().setName("addusers").setDescription("Add all authorized users to this server").setDefaultMemberPermissions(PermissionFlagsBits.Administrator)].map(x=>x.toJSON());
+ new SlashCommandBuilder().setName("addusers").setDescription("Add all authorized users to this server").setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+ new SlashCommandBuilder().setName("adduser").setDescription("Add one previously authorized user to this server")
+   .addStringOption(o=>o.setName("user_id").setDescription("Discord user ID to add").setRequired(true).setMinLength(17).setMaxLength(20))
+   .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)].map(x=>x.toJSON());
  await new REST({version:"10"}).setToken(process.env.BOT_TOKEN).put(Routes.applicationCommands(process.env.CLIENT_ID),{body:cmds});
 }
 function shell(tab,owner,content) {
@@ -101,7 +115,7 @@ app.post("/login",async(req,res)=>{
  const user=String(req.body.username||""),pw=String(req.body.password||"");
  const owner=owners.find(o=>equal(o.user,user)&&verify(pw,o.hash));
  if(!owner){a.n++;if(a.n>=8){a.n=0;a.until=Date.now()+15*60*1000;}attempts.set(ip,a);await log("dashboard_login_failed",{username:user.slice(0,80),ip});return res.redirect(303,"/login?error=1");}
- attempts.delete(ip);req.session.regenerate(async err=>{if(err)return res.status(500).send("Session error");req.session.owner=owner.user;await log("dashboard_login_success",{ip},owner.user);res.redirect(303,"/dashboard");});
+ attempts.delete(ip);req.session.regenerate(async err=>{if(err)return res.status(500).send("Session error");req.session.owner=owner.user;req.session.deviceFingerprint=deviceFingerprint(req);req.session.createdAt=Date.now();await log("dashboard_login_success",{ip,session_ttl_minutes:120,device_bound:true},owner.user);res.redirect(303,"/dashboard");});
 });
 app.post("/dashboard/logout",logged,async(req,res)=>{const owner=req.session.owner;await log("dashboard_logout",{},owner);req.session.destroy(()=>res.redirect("/login"));});
 
@@ -165,13 +179,40 @@ app.get("/dashboard/logs",logged,async(req,res)=>{
 
 client.once("ready",()=>console.log(`Discord bot logged in as ${client.user.tag}`));
 client.on("error",e=>console.error("Discord error",e));
+const PRIMARY_OWNER_DISCORD_ID = "1426813617394946068";
 client.on("interactionCreate",async i=>{
  if(!i.isChatInputCommand())return;
  if(i.commandName==="auth"){await log("auth_command_used",{user_id:i.user.id,guild_id:i.guildId},i.user.id);return i.reply({content:`Connect your account: ${authUrl()}`,ephemeral:true});}
- if(i.commandName!=="addusers")return;
+ if(!["addusers","adduser"].includes(i.commandName))return;
+ // Discord application-command default permissions require Administrator.
+ // Re-check at runtime as a defense-in-depth permission gate.
  if(!i.inGuild()||!i.guild)return i.reply({content:"Run this in the target server.",ephemeral:true});
- if(!i.memberPermissions?.has(PermissionFlagsBits.Administrator))return i.reply({content:"Administrator permission required.",ephemeral:true});
- await i.deferReply({ephemeral:true});await pool.query("UPDATE command_stats SET uses=uses+1 WHERE command_name='addusers'");
+ if(!i.memberPermissions?.has("Administrator")) {
+   await log("unauthorized_add_command_attempt",{command:i.commandName,user_id:i.user.id,guild_id:i.guildId},i.user.id);
+   return i.reply({content:"You need the Administrator permission to use this command.",ephemeral:true});
+ }
+ await i.deferReply({ephemeral:true});
+ if(i.commandName==="adduser") {
+   const uid=String(i.options.getString("user_id",true)).trim();
+   if(!/^\\d{17,20}$/.test(uid))return i.editReply("Invalid Discord user ID.");
+   let row;
+   try { const q=await pool.query("SELECT * FROM authorized_users WHERE user_id=$1",[uid]); row=q.rows[0]; }
+   catch(e) { console.error("Database lookup failed",e); return i.editReply("Database error. Check Render logs."); }
+   if(!row)return i.editReply("That user has not authorized AutoAuth yet. They must use /auth and complete authorization first.");
+   try {
+     let at=dec(row.access_token_enc),rt=dec(row.refresh_token_enc);
+     if(Number(row.expires_at)<=Date.now()+60000){const t=await refresh(rt);at=t.access_token;rt=t.refresh_token||rt;await pool.query("UPDATE authorized_users SET access_token_enc=$1,refresh_token_enc=$2,expires_at=$3 WHERE user_id=$4",[enc(at),enc(rt),Date.now()+Number(t.expires_in||604800)*1000,uid]);}
+     try { await i.guild.members.fetch(uid); await log("adduser_already_present",{guild_id:i.guildId,guild_name:i.guild.name,target_user_id:uid},i.user.id); return i.editReply(`<@${uid}> is already in **${esc(i.guild.name)}**.`); } catch {}
+     await i.guild.members.add(uid,{accessToken:at});
+     await log("adduser_finished",{guild_id:i.guildId,guild_name:i.guild.name,target_user_id:uid,result:"added"},i.user.id);
+     return i.editReply(`Added <@${uid}> to **${esc(i.guild.name)}**.`);
+   } catch(e) {
+     await log("adduser_failed",{guild_id:i.guildId,guild_name:i.guild.name,target_user_id:uid,error:e.message},i.user.id);
+     console.warn("Add single user failed",uid,e.message);
+     return i.editReply(`Could not add that user. Check that their authorization is valid and the bot has permission to join members.`);
+   }
+ }
+ await pool.query("UPDATE command_stats SET uses=uses+1 WHERE command_name='addusers'");
  await log("addusers_started",{guild_id:i.guildId,guild_name:i.guild.name,admin_id:i.user.id},i.user.id);
  let r;try{r=await pool.query("SELECT * FROM authorized_users ORDER BY authorized_at ASC");}catch(e){return i.editReply("Database error. Check Render logs.");}
  let added=0,already=0,failed=0,examples=[];
@@ -182,7 +223,7 @@ client.on("interactionCreate",async i=>{
   await i.guild.members.add(u.user_id,{accessToken:at});added++;
  }catch(e){failed++;if(examples.length<5)examples.push(`${u.username} (${u.user_id}): ${String(e.message).slice(0,120)}`);console.warn("Add user failed",u.user_id,e.message);}
  await log("addusers_finished",{guild_id:i.guildId,guild_name:i.guild.name,admin_id:i.user.id,total:r.rows.length,added,already,failed},i.user.id);
- return i.editReply(`Finished for **${i.guild.name}**.\nAdded: **${added}**\nAlready in server: **${already}**\nFailed: **${failed}**${examples.length?"\n\n"+examples.join("\n"):""}`);
+ return i.editReply(`Finished for **${esc(i.guild.name)}**.\\nAdded: **${added}**\\nAlready in server: **${already}**\\nFailed: **${failed}**${examples.length?"\\n\\n"+examples.join("\\n"):""}`);
 });
 app.listen(port,"0.0.0.0",()=>console.log(`HTTP server listening on port ${port}`));
 (async()=>{try{await schema();await register();await client.login(process.env.BOT_TOKEN);}catch(e){console.error("Startup failed",e);process.exit(1);}})();
