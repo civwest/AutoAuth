@@ -1,106 +1,157 @@
-require('dotenv').config();
-const crypto = require('node:crypto');
-const express = require('express');
-const { Pool } = require('pg');
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
+require("dotenv").config();
+const crypto = require("node:crypto");
+const express = require("express");
+const session = require("express-session");
+const { Pool } = require("pg");
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits, ActivityType } = require("discord.js");
 
-const required = ['BOT_TOKEN','CLIENT_ID','CLIENT_SECRET','REDIRECT_URI','DATABASE_URL','TOKEN_ENCRYPTION_KEY'];
-for (const key of required) if (!process.env[key]) { console.error(`Missing Render environment variable: ${key}`); process.exit(1); }
-const key = Buffer.from(process.env.TOKEN_ENCRYPTION_KEY, 'hex');
-if (key.length !== 32) { console.error('TOKEN_ENCRYPTION_KEY must be 64 hex characters (32 bytes).'); process.exit(1); }
-const port = Number(process.env.PORT) || 10000;
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.DATABASE_SSL === 'disable' ? false : { rejectUnauthorized: false } });
-const app = express();
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
-const states = new Map();
+const required = ["BOT_TOKEN","CLIENT_ID","CLIENT_SECRET","REDIRECT_URI","DATABASE_URL","TOKEN_ENCRYPTION_KEY","SESSION_SECRET","DASHBOARD_OWNER1_USER","DASHBOARD_OWNER1_PASSWORD_HASH","DASHBOARD_OWNER2_USER","DASHBOARD_OWNER2_PASSWORD_HASH"];
+for (const k of required) if (!process.env[k]) { console.error("Missing Render environment variable:", k); process.exit(1); }
+const key = Buffer.from(process.env.TOKEN_ENCRYPTION_KEY, "hex");
+if (key.length !== 32) { console.error("TOKEN_ENCRYPTION_KEY must be 64 hex characters."); process.exit(1); }
 
-function encrypt(text) {
-  const iv = crypto.randomBytes(12), cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-  const data = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
-  return [iv, cipher.getAuthTag(), data].map(b => b.toString('base64')).join('.');
-}
-function decrypt(value) {
-  const [iv, tag, data] = value.split('.');
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64'));
-  decipher.setAuthTag(Buffer.from(tag, 'base64'));
-  return Buffer.concat([decipher.update(Buffer.from(data, 'base64')), decipher.final()]).toString('utf8');
+const app = express(), port = Number(process.env.PORT) || 10000;
+app.set("trust proxy", 1);
+app.use(express.urlencoded({ extended: false, limit: "20kb" }));
+app.use(session({ name:"autoauth.sid", secret:process.env.SESSION_SECRET, resave:false, saveUninitialized:false,
+  cookie:{ httpOnly:true, secure:"auto", sameSite:"lax", maxAge:8*60*60*1000 } }));
+const pool = new Pool({ connectionString:process.env.DATABASE_URL, ssl:process.env.DATABASE_SSL==="disable" ? false : {rejectUnauthorized:false} });
+const client = new Client({ intents:[GatewayIntentBits.Guilds] });
+const owners = [
+ {user:process.env.DASHBOARD_OWNER1_USER, hash:process.env.DASHBOARD_OWNER1_PASSWORD_HASH},
+ {user:process.env.DASHBOARD_OWNER2_USER, hash:process.env.DASHBOARD_OWNER2_PASSWORD_HASH}
+];
+const states = new Map(), attempts = new Map();
+
+function enc(s) { const iv=crypto.randomBytes(12), c=crypto.createCipheriv("aes-256-gcm",key,iv), b=Buffer.concat([c.update(s,"utf8"),c.final()]); return [iv,c.getAuthTag(),b].map(x=>x.toString("base64")).join("."); }
+function dec(s) { const [i,t,b]=s.split("."), d=crypto.createDecipheriv("aes-256-gcm",key,Buffer.from(i,"base64")); d.setAuthTag(Buffer.from(t,"base64")); return Buffer.concat([d.update(Buffer.from(b,"base64")),d.final()]).toString(); }
+function equal(a,b) { const x=Buffer.from(String(a)), y=Buffer.from(String(b)); return x.length===y.length && crypto.timingSafeEqual(x,y); }
+function verify(pw, h) { try { const [alg,salt,expected]=h.split("$"); if(alg!=="scrypt") return false; const got=crypto.scryptSync(pw,Buffer.from(salt,"hex"),32,{N:16384,r:8,p:1}).toString("hex"); return equal(got,expected); } catch { return false; } }
+function esc(s) { return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+async function log(type, detail={}, actor="system") { try { await pool.query("INSERT INTO audit_logs(event_type,actor,detail) VALUES($1,$2,$3)",[type,actor,JSON.stringify(detail)]); } catch(e) { console.error("Log insert failed",e.message); } }
+async function schema() {
+ await pool.query(`CREATE TABLE IF NOT EXISTS authorized_users(user_id TEXT PRIMARY KEY, username TEXT NOT NULL, access_token_enc TEXT NOT NULL, refresh_token_enc TEXT NOT NULL, expires_at BIGINT NOT NULL, authorized_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ CREATE TABLE IF NOT EXISTS audit_logs(id BIGSERIAL PRIMARY KEY,event_type TEXT NOT NULL,actor TEXT NOT NULL DEFAULT 'system',detail JSONB NOT NULL DEFAULT '{}'::jsonb,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ CREATE TABLE IF NOT EXISTS command_stats(command_name TEXT PRIMARY KEY,uses BIGINT NOT NULL DEFAULT 0);
+ INSERT INTO command_stats(command_name,uses) VALUES('addusers',0) ON CONFLICT(command_name) DO NOTHING;`);
 }
 function authUrl() {
-  const state = crypto.randomBytes(32).toString('hex');
-  states.set(state, Date.now() + 600000);
-  const url = new URL('https://discord.com/oauth2/authorize');
-  url.search = new URLSearchParams({ client_id: process.env.CLIENT_ID, response_type: 'code', redirect_uri: process.env.REDIRECT_URI, scope: 'identify guilds.join', state }).toString();
-  return url.toString();
+ const state=crypto.randomBytes(32).toString("hex"); states.set(state,Date.now()+600000);
+ const u=new URL("https://discord.com/oauth2/authorize"); u.searchParams.set("client_id",process.env.CLIENT_ID); u.searchParams.set("response_type","code"); u.searchParams.set("redirect_uri",process.env.REDIRECT_URI); u.searchParams.set("scope","identify guilds.join"); u.searchParams.set("state",state); return u.toString();
 }
+function logged(req,res,next) { if(!req.session.owner) return res.redirect("/login"); next(); }
+function verifyOrigin(req,res,next) { const origin=req.get("origin"); if(origin && origin!==`${req.protocol}://${req.get("host")}`) return res.status(403).send("Invalid origin."); next(); }
 async function refresh(refreshToken) {
-  const r = await fetch('https://discord.com/api/v10/oauth2/token', { method: 'POST', headers: {'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams({ client_id: process.env.CLIENT_ID, client_secret: process.env.CLIENT_SECRET, grant_type: 'refresh_token', refresh_token: refreshToken }) });
-  const body = await r.json();
-  if (!r.ok) throw new Error(body.error_description || body.error || `OAuth refresh failed (${r.status})`);
-  return body;
+ const r=await fetch("https://discord.com/api/v10/oauth2/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:process.env.CLIENT_ID,client_secret:process.env.CLIENT_SECRET,grant_type:"refresh_token",refresh_token:refreshToken})});
+ const b=await r.json(); if(!r.ok) throw Error(b.error_description||b.error||"Token refresh failed"); return b;
 }
-async function registerCommands() {
-  const commands = [
-    new SlashCommandBuilder().setName('auth').setDescription('Get your AutoAuth account connection link'),
-    new SlashCommandBuilder().setName('addusers').setDescription('Add all AutoAuth-authorized users to this server').setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-  ].map(x => x.toJSON());
-  await new REST({ version: '10' }).setToken(process.env.BOT_TOKEN).put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
-  console.log('Registered global /auth and /addusers commands.');
+async function register() {
+ const cmds=[new SlashCommandBuilder().setName("auth").setDescription("Get your AutoAuth account-linking URL"),
+ new SlashCommandBuilder().setName("addusers").setDescription("Add all authorized users to this server").setDefaultMemberPermissions(PermissionFlagsBits.Administrator)].map(x=>x.toJSON());
+ await new REST({version:"10"}).setToken(process.env.BOT_TOKEN).put(Routes.applicationCommands(process.env.CLIENT_ID),{body:cmds});
 }
-
-app.get('/', (_req, res) => res.type('html').send('<!doctype html><html><meta charset="utf-8"><title>AutoAuth</title><body style="font:16px system-ui;max-width:650px;margin:12vh auto;padding:24px"><h1>AutoAuth</h1><p>Connect your Discord account so an administrator can include it in their server’s /addusers run.</p><a href="/auth">Connect Discord</a></body></html>'));
-app.get('/health', (_req, res) => res.status(200).send('ok'));
-app.get('/auth', (_req, res) => res.redirect(302, authUrl()));
-app.get('/oauth/callback', async (req, res) => {
-  const { code, state, error } = req.query;
-  if (error) return res.status(400).send('Discord authorization was cancelled or denied.');
-  const expiry = states.get(state); states.delete(state);
-  if (typeof code !== 'string' || typeof state !== 'string' || !expiry || expiry < Date.now()) return res.status(400).send('Authorization link expired or invalid. Open /auth and try again.');
-  try {
-    const tokenRes = await fetch('https://discord.com/api/v10/oauth2/token', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:new URLSearchParams({ client_id:process.env.CLIENT_ID, client_secret:process.env.CLIENT_SECRET, grant_type:'authorization_code', code, redirect_uri:process.env.REDIRECT_URI }) });
-    const tokens = await tokenRes.json();
-    if (!tokenRes.ok) { console.error('OAuth exchange failed:', tokens.error); return res.status(502).send('Discord authorization could not be completed. Please try again.'); }
-    const userRes = await fetch('https://discord.com/api/v10/users/@me', { headers:{ Authorization:`Bearer ${tokens.access_token}` } });
-    const user = await userRes.json();
-    if (!userRes.ok || !user.id) return res.status(502).send('Could not retrieve your Discord profile. Please try again.');
-    await pool.query(`INSERT INTO authorized_users(user_id, username, access_token_enc, refresh_token_enc, expires_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(user_id) DO UPDATE SET username=EXCLUDED.username, access_token_enc=EXCLUDED.access_token_enc, refresh_token_enc=EXCLUDED.refresh_token_enc, expires_at=EXCLUDED.expires_at, authorized_at=NOW()`, [user.id, user.global_name || user.username || user.id, encrypt(tokens.access_token), encrypt(tokens.refresh_token), Date.now() + Number(tokens.expires_in || 604800) * 1000]);
-    return res.type('html').send('<!doctype html><html><meta charset="utf-8"><title>Connected</title><body style="font:16px system-ui;max-width:650px;margin:12vh auto;padding:24px"><h1>Discord connected successfully</h1><p>Your account is saved. An administrator can now run <code>/addusers</code> in the server they want authorized users added to.</p>You can close this page.</body></html>');
-  } catch (e) { console.error('OAuth callback error:', e.message); return res.status(500).send('AutoAuth could not finish connecting your account. Please try again later.'); }
+function shell(tab,owner,content) {
+ return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AutoAuth Dashboard</title><style>
+ :root{color-scheme:dark;--bg:#0d1117;--panel:#161b22;--line:#30363d;--muted:#9da7b3;--text:#e6edf3;--accent:#7289da}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui}a{color:inherit;text-decoration:none}.layout{display:flex;min-height:100vh}.side{width:225px;padding:24px 14px;background:#11161d;border-right:1px solid var(--line);flex-shrink:0}.brand{font-size:20px;font-weight:800;padding:0 12px 24px}.nav a{display:block;padding:12px;border-radius:8px;margin:4px 0;color:var(--muted)}.nav .on,.nav a:hover{background:#222a35;color:white}main{padding:28px;width:100%;max-width:1400px;margin:auto}.top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.muted{color:var(--muted)}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin:20px 0}.card{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:18px;margin:14px 0}.metric{font-size:30px;font-weight:800;margin-top:8px}.pill{background:#263c2c;color:#7ee787;border-radius:20px;padding:5px 9px}.off{background:#3c2528;color:#ff938a}button,.btn{background:var(--accent);border:0;border-radius:8px;color:white;padding:10px 14px;font-weight:650;cursor:pointer}button.secondary,.btn.secondary{background:#303843}button.danger{background:#8b3038}input,select{width:100%;padding:10px;margin:6px 0 12px;background:#0d1117;color:white;border:1px solid var(--line);border-radius:8px}label{font-size:13px;color:var(--muted)}.row{display:flex;gap:12px;align-items:end;flex-wrap:wrap}.row>div{flex:1;min-width:160px}table{border-collapse:collapse;width:100%;font-size:13px}td,th{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted)}.wrap{overflow:auto}pre{white-space:pre-wrap;overflow-wrap:anywhere}.notice{padding:12px;border:1px solid var(--line);border-radius:8px;color:var(--muted)}@media(max-width:700px){.layout{display:block}.side{width:auto;border-right:0;border-bottom:1px solid var(--line)}.nav{display:flex;flex-wrap:wrap}.nav a{padding:9px}.brand{padding-bottom:10px}main{padding:15px}}
+ </style></head><body><div class="layout"><aside class="side"><div class="brand">◈ AutoAuth</div><nav class="nav">
+ <a class="${tab==="home"?"on":""}" href="/dashboard">Bot Control</a><a class="${tab==="db"?"on":""}" href="/dashboard/database">Database</a><a class="${tab==="logs"?"on":""}" href="/dashboard/logs">Logs</a></nav><p class="muted" style="margin:28px 12px">Signed in as <b>${esc(owner)}</b></p><form method="post" action="/dashboard/logout"><button class="secondary" style="width:100%">Log out</button></form></aside><main>${content}</main></div></body></html>`;
+}
+app.get("/",(_,res)=>res.redirect("/dashboard"));
+app.get("/health",(_,res)=>res.send("ok"));
+app.get("/auth",(_,res)=>res.redirect(302,authUrl()));
+app.get("/oauth/callback",async(req,res)=>{
+ const {code,state,error}=req.query;
+ if(error){await log("oauth_denied",{error:String(error)});return res.status(400).send("Authorization cancelled or denied.");}
+ if(typeof code!=="string"||typeof state!=="string"||!(states.get(state)>Date.now())){await log("oauth_invalid_state");return res.status(400).send("Authorization link expired or invalid. Open /auth and try again.");}
+ states.delete(state);
+ try{
+  const r=await fetch("https://discord.com/api/v10/oauth2/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:process.env.CLIENT_ID,client_secret:process.env.CLIENT_SECRET,grant_type:"authorization_code",code,redirect_uri:process.env.REDIRECT_URI})});
+  const t=await r.json(); if(!r.ok){await log("oauth_exchange_failed",{status:r.status,error:t.error});return res.status(502).send("Discord token exchange failed.");}
+  const ur=await fetch("https://discord.com/api/v10/users/@me",{headers:{Authorization:`Bearer ${t.access_token}`}}), u=await ur.json();
+  if(!ur.ok||!u.id){await log("oauth_user_fetch_failed",{status:ur.status});return res.status(502).send("Could not retrieve your Discord account.");}
+  await pool.query(`INSERT INTO authorized_users(user_id,username,access_token_enc,refresh_token_enc,expires_at,authorized_at) VALUES($1,$2,$3,$4,$5,NOW()) ON CONFLICT(user_id) DO UPDATE SET username=EXCLUDED.username,access_token_enc=EXCLUDED.access_token_enc,refresh_token_enc=EXCLUDED.refresh_token_enc,expires_at=EXCLUDED.expires_at,authorized_at=NOW()`,[u.id,u.global_name||u.username||u.id,enc(t.access_token),enc(t.refresh_token),Date.now()+Number(t.expires_in||604800)*1000]);
+  await log("oauth_success",{user_id:u.id,username:u.global_name||u.username});
+  res.send("<h1>Discord connected</h1><p>Your account is saved. An admin can run /addusers in a server.</p>");
+ }catch(e){await log("oauth_callback_error",{error:e.message});console.error(e);res.status(500).send("OAuth callback failed. Check Render logs.");}
 });
 
-client.once('ready', () => console.log(`Discord bot logged in as ${client.user.tag}`));
-client.on('interactionCreate', async interaction => {
-  if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName === 'auth') return interaction.reply({ content: `Connect your account: ${authUrl()}`, ephemeral: true });
-  if (interaction.commandName !== 'addusers') return;
-  if (!interaction.inGuild() || !interaction.guild) return interaction.reply({ content:'Run this command in the server you want users added to.', ephemeral:true });
-  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) return interaction.reply({ content:'Only server administrators can use this command.', ephemeral:true });
-  await interaction.deferReply({ ephemeral:true });
-  let rows;
-  try { rows = (await pool.query('SELECT * FROM authorized_users ORDER BY authorized_at ASC')).rows; }
-  catch (e) { console.error('Database read failed:', e.message); return interaction.editReply('Database error loading authorized users. Check Render logs.'); }
-  if (!rows.length) return interaction.editReply('No users have authorized AutoAuth yet. Users can visit the website’s /auth page or use the /auth command.');
-  let added=0, already=0, failed=0; const samples=[];
-  for (const row of rows) {
-    try {
-      let access = decrypt(row.access_token_enc), refreshToken = decrypt(row.refresh_token_enc);
-      if (Number(row.expires_at) < Date.now()+60000) {
-        const fresh = await refresh(refreshToken); access=fresh.access_token; refreshToken=fresh.refresh_token || refreshToken;
-        await pool.query('UPDATE authorized_users SET access_token_enc=$1, refresh_token_enc=$2, expires_at=$3 WHERE user_id=$4', [encrypt(access), encrypt(refreshToken), Date.now()+Number(fresh.expires_in || 604800)*1000, row.user_id]);
-      }
-      try { await interaction.guild.members.fetch(row.user_id); already++; continue; } catch {}
-      await interaction.guild.members.add(row.user_id, { accessToken: access }); added++;
-    } catch (e) { failed++; console.warn(`Failed to add ${row.user_id} to ${interaction.guildId}:`, e.message); if(samples.length<5) samples.push(`${row.username} (${row.user_id}): ${String(e.message).slice(0,130)}`); }
-  }
-  let msg=`Finished for **${interaction.guild.name}**.\nAdded: **${added}**\nAlready in server: **${already}**\nFailed: **${failed}**`;
-  if(samples.length) msg+='\n\nFirst failures:\n'+samples.map(x=>'• '+x).join('\n');
-  return interaction.editReply(msg);
+app.get("/dashboard/login",(req,res)=>res.redirect(302,"/login"));
+app.get("/login",(req,res)=>{
+ if(req.session.owner)return res.redirect("/dashboard");
+ res.send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AutoAuth Login</title><style>body{font:16px system-ui;background:#0d1117;color:#e6edf3}.box{max-width:420px;margin:12vh auto;padding:28px;background:#161b22;border:1px solid #30363d;border-radius:14px}input,button{width:100%;padding:12px;margin:8px 0 14px;box-sizing:border-box;border-radius:8px;border:1px solid #30363d}input{background:#0d1117;color:white}button{background:#7289da;color:white;border:0;cursor:pointer}</style><div class="box"><h1>AutoAuth</h1><p>Owner dashboard login</p>${req.query.error?"<p>Login failed. Check username and password.</p>":""}<form method="post"><label>Username</label><input name="username" autocomplete="username" required><label>Password</label><input type="password" name="password" autocomplete="current-password" required><button>Sign in</button></form></div>`);
+});
+app.post("/dashboard/login",async(req,res)=>{
+ const ip=req.ip||"unknown", a=attempts.get(ip)||{n:0,until:0};
+ if(a.until>Date.now())return res.status(429).send("Too many login attempts. Try again later.");
+ const user=String(req.body.username||""),pw=String(req.body.password||"");
+ const owner=owners.find(o=>equal(o.user,user)&&verify(pw,o.hash));
+ if(!owner){a.n++;if(a.n>=8){a.n=0;a.until=Date.now()+15*60*1000;}attempts.set(ip,a);await log("dashboard_login_failed",{username:user.slice(0,80),ip});return res.redirect(303,"/login?error=1");}
+ attempts.delete(ip);req.session.regenerate(async err=>{if(err)return res.status(500).send("Session error");req.session.owner=owner.user;await log("dashboard_login_success",{ip},owner.user);res.redirect(303,"/dashboard");});
+});
+app.post("/dashboard/logout",logged,async(req,res)=>{const owner=req.session.owner;await log("dashboard_logout",{},owner);req.session.destroy(()=>res.redirect("/dashboard/login"));});
+
+app.get("/dashboard",logged,async(req,res)=>{
+ try{
+  const [uc,cs,lc]=await Promise.all([pool.query("SELECT COUNT(*)::int n FROM authorized_users"),pool.query("SELECT uses FROM command_stats WHERE command_name='addusers'"),pool.query("SELECT COUNT(*)::int n FROM audit_logs")]);
+  const guilds=client.guilds.cache.map(g=>({id:g.id,name:g.name,members:g.memberCount}));
+  const presence=client.user?.presence?.status||"offline", activity=client.user?.presence?.activities?.[0];
+  const content=`<div class="top"><div><h1>Bot Control</h1><p class="muted">Actual Discord presence and bot statistics</p></div><span class="pill ${client.isReady()?"":"off"}">${client.isReady()?"Gateway connected":"Disconnected"}</span></div>
+  <div class="grid"><div class="card"><div class="muted">Discord connection</div><div class="metric">${client.isReady()?"Online":"Offline"}</div></div><div class="card"><div class="muted">Discord presence</div><div class="metric">${esc(presence)}</div><p class="muted">${activity?esc(activity.name):"No activity"}</p></div><div class="card"><div class="muted">Authorized users</div><div class="metric">${uc.rows[0].n}</div></div><div class="card"><div class="muted">/addusers uses</div><div class="metric">${cs.rows[0]?.uses||0}</div></div><div class="card"><div class="muted">Servers</div><div class="metric">${guilds.length}</div></div><div class="card"><div class="muted">Log entries</div><div class="metric">${lc.rows[0].n}</div></div></div>
+  <div class="card"><h2>Change Discord presence</h2><p class="muted">These settings change the bot's visible Discord status, not Render's service status.</p><form method="post" action="/dashboard/presence"><div class="row"><div><label>Presence</label><select name="status"><option value="online">Online</option><option value="idle">Idle</option><option value="dnd">Do Not Disturb</option><option value="invisible">Invisible</option></select></div><div><label>Activity</label><select name="kind"><option value="Playing">Playing</option><option value="Listening">Listening</option><option value="Watching">Watching</option><option value="Competing">Competing</option><option value="none">None</option></select></div><div><label>Activity text</label><input name="text" maxlength="128" placeholder="e.g. AutoAuth"></div></div><button>Save presence</button></form></div>
+  <div class="card"><div class="top"><h2>Servers</h2><a class="btn secondary" href="/dashboard">Refresh</a></div><div class="wrap"><table><tr><th>Server</th><th>Server ID</th><th>Cached members</th></tr>${guilds.map(g=>`<tr><td>${esc(g.name)}</td><td>${esc(g.id)}</td><td>${Number(g.members)||"—"}</td></tr>`).join("")||"<tr><td colspan=3>Bot is not in any servers.</td></tr>"}</table></div></div>`;
+  res.send(shell("home",req.session.owner,content));
+ }catch(e){console.error(e);res.status(500).send("Dashboard failed to load.");}
+});
+app.post("/dashboard/presence",logged,verifyOrigin,async(req,res)=>{
+ const status=String(req.body.status||"online"),kind=String(req.body.kind||"none"),text=String(req.body.text||"").trim().slice(0,128);
+ if(!["online","idle","dnd","invisible"].includes(status))return res.status(400).send("Invalid status.");
+ const types={Playing:ActivityType.Playing,Listening:ActivityType.Listening,Watching:ActivityType.Watching,Competing:ActivityType.Competing};
+ if(kind!=="none"&&!Object.hasOwn(types,kind))return res.status(400).send("Invalid activity.");
+ if(!client.isReady())return res.status(503).send("Discord bot is disconnected.");
+ client.user.setPresence({status,activities:kind!=="none"&&text?[{name:text,type:types[kind]}]:[]});
+ await log("presence_updated",{status,kind,text},req.session.owner);res.redirect(303,"/dashboard");
 });
 
-async function start() {
-  await pool.query(`CREATE TABLE IF NOT EXISTS authorized_users (user_id TEXT PRIMARY KEY, username TEXT NOT NULL, access_token_enc TEXT NOT NULL, refresh_token_enc TEXT NOT NULL, expires_at BIGINT NOT NULL, authorized_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
-  app.listen(port, '0.0.0.0', () => console.log(`HTTP server listening on port ${port}`));
-  await registerCommands();
-  await client.login(process.env.BOT_TOKEN);
-}
-start().catch(e => { console.error('Startup failed:', e); process.exit(1); });
-setInterval(() => { for (const [s, t] of states) if (t < Date.now()) states.delete(s); }, 60000).unref();
+app.get("/dashboard/database",logged,async(req,res)=>{
+ try{
+  const q=String(req.query.q||"").slice(0,100),r=await pool.query("SELECT user_id,username,authorized_at FROM authorized_users WHERE user_id ILIKE $1 OR username ILIKE $1 ORDER BY authorized_at DESC LIMIT 300",[`%${q}%`]);
+  const content=`<div class="top"><div><h1>Database</h1><p class="muted">Stored linked accounts; tokens are never displayed.</p></div></div><div class="card"><form class="row" method="get"><div><label>Search username or Discord ID</label><input name="q" value="${esc(q)}"></div><div><button>Search</button></div></form><div class="wrap"><table><tr><th>Username</th><th>Discord ID</th><th>Authorized at (UTC)</th><th>Action</th></tr>${r.rows.map(u=>`<tr><td>${esc(u.username)}</td><td>${esc(u.user_id)}</td><td>${esc(new Date(u.authorized_at).toISOString().replace("T"," ").slice(0,19))}</td><td><form method="post" action="/dashboard/database/${encodeURIComponent(u.user_id)}/revoke" onsubmit="return confirm('Revoke saved authorization?')"><button class="danger">Revoke</button></form></td></tr>`).join("")||"<tr><td colspan=4>No records.</td></tr>"}</table></div></div><p class="notice">Revoke deletes the saved OAuth tokens. It does not remove the user from Discord servers they already joined.</p>`;
+  res.send(shell("db",req.session.owner,content));
+ }catch(e){console.error(e);res.status(500).send("Database view failed.");}
+});
+app.post("/dashboard/database/:id/revoke",logged,verifyOrigin,async(req,res)=>{
+ const id=String(req.params.id),r=await pool.query("DELETE FROM authorized_users WHERE user_id=$1 RETURNING username",[id]);
+ await log("authorization_revoked",{user_id:id,username:r.rows[0]?.username||null},req.session.owner);res.redirect(303,"/dashboard/database");
+});
+app.get("/dashboard/logs",logged,async(req,res)=>{
+ try{
+  const r=await pool.query("SELECT id,event_type,actor,detail,created_at FROM audit_logs ORDER BY id DESC LIMIT 300");
+  const content=`<div class="top"><div><h1>Logs</h1><p class="muted">Latest 300 audit events</p></div></div><div class="card"><div class="wrap"><table><tr><th>Time UTC</th><th>Event</th><th>Actor</th><th>Details</th></tr>${r.rows.map(x=>`<tr><td>${esc(new Date(x.created_at).toISOString().replace("T"," ").slice(0,19))}</td><td>${esc(x.event_type)}</td><td>${esc(x.actor)}</td><td><pre>${esc(JSON.stringify(x.detail))}</pre></td></tr>`).join("")||"<tr><td colspan=4>No log entries yet.</td></tr>"}</table></div></div>`;
+  res.send(shell("logs",req.session.owner,content));
+ }catch(e){console.error(e);res.status(500).send("Logs failed to load.");}
+});
+
+client.once("ready",()=>console.log(`Discord bot logged in as ${client.user.tag}`));
+client.on("error",e=>console.error("Discord error",e));
+client.on("interactionCreate",async i=>{
+ if(!i.isChatInputCommand())return;
+ if(i.commandName==="auth"){await log("auth_command_used",{user_id:i.user.id,guild_id:i.guildId},i.user.id);return i.reply({content:`Connect your account: ${authUrl()}`,ephemeral:true});}
+ if(i.commandName!=="addusers")return;
+ if(!i.inGuild()||!i.guild)return i.reply({content:"Run this in the target server.",ephemeral:true});
+ if(!i.memberPermissions?.has(PermissionFlagsBits.Administrator))return i.reply({content:"Administrator permission required.",ephemeral:true});
+ await i.deferReply({ephemeral:true});await pool.query("UPDATE command_stats SET uses=uses+1 WHERE command_name='addusers'");
+ await log("addusers_started",{guild_id:i.guildId,guild_name:i.guild.name,admin_id:i.user.id},i.user.id);
+ let r;try{r=await pool.query("SELECT * FROM authorized_users ORDER BY authorized_at ASC");}catch(e){return i.editReply("Database error. Check Render logs.");}
+ let added=0,already=0,failed=0,examples=[];
+ for(const u of r.rows)try{
+  let at=dec(u.access_token_enc),rt=dec(u.refresh_token_enc);
+  if(Number(u.expires_at)<=Date.now()+60000){const t=await refresh(rt);at=t.access_token;rt=t.refresh_token||rt;await pool.query("UPDATE authorized_users SET access_token_enc=$1,refresh_token_enc=$2,expires_at=$3 WHERE user_id=$4",[enc(at),enc(rt),Date.now()+Number(t.expires_in||604800)*1000,u.user_id]);}
+  try{await i.guild.members.fetch(u.user_id);already++;continue;}catch{}
+  await i.guild.members.add(u.user_id,{accessToken:at});added++;
+ }catch(e){failed++;if(examples.length<5)examples.push(`${u.username} (${u.user_id}): ${String(e.message).slice(0,120)}`);console.warn("Add user failed",u.user_id,e.message);}
+ await log("addusers_finished",{guild_id:i.guildId,guild_name:i.guild.name,admin_id:i.user.id,total:r.rows.length,added,already,failed},i.user.id);
+ return i.editReply(`Finished for **${i.guild.name}**.\nAdded: **${added}**\nAlready in server: **${already}**\nFailed: **${failed}**${examples.length?"\n\n"+examples.join("\n"):""}`);
+});
+app.listen(port,"0.0.0.0",()=>console.log(`HTTP server listening on port ${port}`));
+(async()=>{try{await schema();await register();await client.login(process.env.BOT_TOKEN);}catch(e){console.error("Startup failed",e);process.exit(1);}})();
+setInterval(()=>{for(const [s,t] of states)if(t<Date.now())states.delete(s);},60000).unref();

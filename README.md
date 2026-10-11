@@ -1,28 +1,20 @@
-# AutoAuth Render rebuild
+# AutoAuth Dashboard
 
-Implements OAuth account linking and admin-only `/addusers`:
-- Users authorize at `/auth` or with the `/auth` Discord command.
-- Callback stores the Discord user ID and encrypted OAuth access/refresh tokens in PostgreSQL.
-- An administrator runs `/addusers` in the target server; every saved authorized account is added to that server if not already a member.
+The main Bot Control page displays the bot's Discord gateway connection and actual Discord presence (online/idle/DND/invisible), authorized-user count, `/addusers` usage count, log count, and guild list. Owners can change the Discord presence and activity from the page.
 
-## Render settings
+Tabs:
+- Bot Control
+- Database: search linked accounts and revoke saved OAuth credentials.
+- Logs: recent OAuth, dashboard login, presence, and `/addusers` audit events.
+
+Login URL: `/login`. The dashboard at `/dashboard` redirects unauthenticated visitors to `/login`. The old `/dashboard/login` URL redirects to `/login`.
+
+## Render
 Build command: `yarn` (or `npm install`)
 Start command: `node index.js` (or `npm start`)
 
-Add environment variables in Render:
-- `BOT_TOKEN`: Discord bot token
-- `CLIENT_ID`: Discord application ID
-- `CLIENT_SECRET`: OAuth2 client secret
-- `REDIRECT_URI`: `https://YOUR-RENDER-SERVICE.onrender.com/oauth/callback`
-- `DATABASE_URL`: connection URL for a Render PostgreSQL database
-- `TOKEN_ENCRYPTION_KEY`: 64 hexadecimal characters (32 bytes)
+Required Render environment values: BOT_TOKEN, CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DATABASE_URL, TOKEN_ENCRYPTION_KEY (64 hex chars), SESSION_SECRET, DASHBOARD_OWNER1_USER=civwest, DASHBOARD_OWNER1_PASSWORD_HASH, DASHBOARD_OWNER2_USER=jacob, DASHBOARD_OWNER2_PASSWORD_HASH.
 
-Create a PostgreSQL database in Render and use its internal connection URL. Do not commit secrets to GitHub.
+The owner password hashes are generated separately for this delivery. Copy them from the assistant response into Render Environment; do not commit the hashes or passwords to GitHub. OAuth redirect URL must exactly match the Discord Developer Portal entry.
 
-## Discord setup
-1. In Developer Portal > OAuth2 > Redirects, add the exact `REDIRECT_URI` from Render.
-2. Invite the bot with `bot` and `applications.commands` scopes to every server where it should operate.
-3. Ensure the bot has permission to add members / manage server members.
-4. `/addusers` is registered globally and may take a while to appear.
-
-Users must approve the `identify` and `guilds.join` OAuth scopes. Only users who authorized AutoAuth are eligible. The bot adds them to the server where the admin invokes `/addusers`.
+The PostgreSQL schema is created automatically. Dashboard sessions are stored in Express's in-memory session store and will log out on service restarts; that is acceptable for a small personal dashboard. Audit logs and authorization records persist in PostgreSQL.

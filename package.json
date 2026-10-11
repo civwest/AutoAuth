@@ -1,7 +1,8 @@
 {
   "name": "autoauth-render",
-  "version": "2.0.0",
+  "version": "3.1.0",
   "private": true,
+  "description": "AutoAuth Discord bot and owner dashboard",
   "main": "index.js",
   "scripts": {"start": "node index.js"},
   "engines": {"node": ">=20"},
@@ -9,6 +10,7 @@
     "discord.js": "^14.19.3",
     "dotenv": "^16.4.7",
     "express": "^5.1.0",
+    "express-session": "^1.18.2",
     "pg": "^8.16.3"
   }
 }
