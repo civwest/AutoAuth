@@ -119,7 +119,7 @@ app.get("/dashboard",logged,async(req,res)=>{
 });
 app.post("/dashboard/servers/:id/leave",logged,verifyOrigin,async(req,res)=>{
  const guildId=String(req.params.id||"");
- if(!/^\\d{17,20}$/.test(guildId)) return res.status(400).send("Invalid server ID.");
+ if(!/^\d{17,20}$/.test(guildId)) return res.status(400).send("Invalid server ID.");
  if(!client.isReady()) return res.status(503).send("Discord bot is disconnected.");
  const guild=client.guilds.cache.get(guildId);
  if(!guild) return res.status(404).send("That server was not found in the bot's current server list.");
