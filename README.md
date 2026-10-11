@@ -18,3 +18,4 @@ Required Render environment values: BOT_TOKEN, CLIENT_ID, CLIENT_SECRET, REDIREC
 The owner password hashes are generated separately for this delivery. Copy them from the assistant response into Render Environment; do not commit the hashes or passwords to GitHub. OAuth redirect URL must exactly match the Discord Developer Portal entry.
 
 The PostgreSQL schema is created automatically. Dashboard sessions are stored in Express's in-memory session store and will log out on service restarts; that is acceptable for a small personal dashboard. Audit logs and authorization records persist in PostgreSQL.
+\n\nDashboard server controls: the Servers table has a Leave server action for each guild; it asks for confirmation and records the action in Logs. Audit log actor IDs 1426813617394946068 and 1481562091520262236 are displayed as You (Civwest) and Jacob, respectively.\n

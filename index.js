@@ -28,6 +28,21 @@ function dec(s) { const [i,t,b]=s.split("."), d=crypto.createDecipheriv("aes-256
 function equal(a,b) { const x=Buffer.from(String(a)), y=Buffer.from(String(b)); return x.length===y.length && crypto.timingSafeEqual(x,y); }
 function verify(pw, h) { try { const [alg,salt,expected]=h.split("$"); if(alg!=="scrypt") return false; const got=crypto.scryptSync(pw,Buffer.from(salt,"hex"),32,{N:16384,r:8,p:1}).toString("hex"); return equal(got,expected); } catch { return false; } }
 function esc(s) { return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+const DISCORD_OWNER_LABELS = {
+ "1426813617394946068": "You (Civwest)",
+ "1481562091520262236": "Jacob"
+};
+function displayActor(actor) {
+ const value = String(actor ?? "system");
+ return DISCORD_OWNER_LABELS[value] || value;
+}
+function displayDetail(detail) {
+ let json = JSON.stringify(detail ?? {});
+ for (const [id, label] of Object.entries(DISCORD_OWNER_LABELS)) {
+   json = json.split(id).join(label);
+ }
+ return json;
+}
 async function log(type, detail={}, actor="system") { try { await pool.query("INSERT INTO audit_logs(event_type,actor,detail) VALUES($1,$2,$3)",[type,actor,JSON.stringify(detail)]); } catch(e) { console.error("Log insert failed",e.message); } }
 async function schema() {
  await pool.query(`CREATE TABLE IF NOT EXISTS authorized_users(user_id TEXT PRIMARY KEY, username TEXT NOT NULL, access_token_enc TEXT NOT NULL, refresh_token_enc TEXT NOT NULL, expires_at BIGINT NOT NULL, authorized_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
@@ -98,9 +113,26 @@ app.get("/dashboard",logged,async(req,res)=>{
   const content=`<div class="top"><div><h1>Bot Control</h1><p class="muted">Actual Discord presence and bot statistics</p></div><span class="pill ${client.isReady()?"":"off"}">${client.isReady()?"Gateway connected":"Disconnected"}</span></div>
   <div class="grid"><div class="card"><div class="muted">Discord connection</div><div class="metric">${client.isReady()?"Online":"Offline"}</div></div><div class="card"><div class="muted">Discord presence</div><div class="metric">${esc(presence)}</div><p class="muted">${activity?esc(activity.name):"No activity"}</p></div><div class="card"><div class="muted">Authorized users</div><div class="metric">${uc.rows[0].n}</div></div><div class="card"><div class="muted">/addusers uses</div><div class="metric">${cs.rows[0]?.uses||0}</div></div><div class="card"><div class="muted">Servers</div><div class="metric">${guilds.length}</div></div><div class="card"><div class="muted">Log entries</div><div class="metric">${lc.rows[0].n}</div></div></div>
   <div class="card"><h2>Change Discord presence</h2><p class="muted">These settings change the bot's visible Discord status, not Render's service status.</p><form method="post" action="/dashboard/presence"><div class="row"><div><label>Presence</label><select name="status"><option value="online">Online</option><option value="idle">Idle</option><option value="dnd">Do Not Disturb</option><option value="invisible">Invisible</option></select></div><div><label>Activity</label><select name="kind"><option value="Playing">Playing</option><option value="Listening">Listening</option><option value="Watching">Watching</option><option value="Competing">Competing</option><option value="none">None</option></select></div><div><label>Activity text</label><input name="text" maxlength="128" placeholder="e.g. AutoAuth"></div></div><button>Save presence</button></form></div>
-  <div class="card"><div class="top"><h2>Servers</h2><a class="btn secondary" href="/dashboard">Refresh</a></div><div class="wrap"><table><tr><th>Server</th><th>Server ID</th><th>Cached members</th></tr>${guilds.map(g=>`<tr><td>${esc(g.name)}</td><td>${esc(g.id)}</td><td>${Number(g.members)||"—"}</td></tr>`).join("")||"<tr><td colspan=3>Bot is not in any servers.</td></tr>"}</table></div></div>`;
+  <div class="card"><div class="top"><h2>Servers</h2><a class="btn secondary" href="/dashboard">Refresh</a></div><div class="wrap"><table><tr><th>Server</th><th>Server ID</th><th>Cached members</th><th style="text-align:right">Action</th></tr>${guilds.map(g=>`<tr><td>${esc(g.name)}</td><td>${esc(g.id)}</td><td>${Number(g.members)||"—"}</td><td style="text-align:right"><form method="post" action="/dashboard/servers/${encodeURIComponent(g.id)}/leave" onsubmit="return confirm('Make AutoAuth leave '+${JSON.stringify(g.name)}+'? This cannot be undone from the dashboard.')"><button class="btn secondary" style="background:#7f1d1d;border-color:#991b1b;color:white">Leave server</button></form></td></tr>`).join("")||"<tr><td colspan=4>Bot is not in any servers.</td></tr>"}</table></div></div>`;
   res.send(shell("home",req.session.owner,content));
  }catch(e){console.error(e);res.status(500).send("Dashboard failed to load.");}
+});
+app.post("/dashboard/servers/:id/leave",logged,verifyOrigin,async(req,res)=>{
+ const guildId=String(req.params.id||"");
+ if(!/^\\d{17,20}$/.test(guildId)) return res.status(400).send("Invalid server ID.");
+ if(!client.isReady()) return res.status(503).send("Discord bot is disconnected.");
+ const guild=client.guilds.cache.get(guildId);
+ if(!guild) return res.status(404).send("That server was not found in the bot's current server list.");
+ const guildName=guild.name;
+ try {
+   await guild.leave();
+   await log("bot_left_server",{guild_id:guildId,guild_name:guildName},req.session.owner);
+   return res.redirect(303,"/dashboard");
+ } catch(e) {
+   await log("bot_leave_server_failed",{guild_id:guildId,guild_name:guildName,error:e.message},req.session.owner);
+   console.error("Failed to leave server",e);
+   return res.status(500).send("Could not leave that server. Check Render logs.");
+ }
 });
 app.post("/dashboard/presence",logged,verifyOrigin,async(req,res)=>{
  const status=String(req.body.status||"online"),kind=String(req.body.kind||"none"),text=String(req.body.text||"").trim().slice(0,128);
@@ -126,7 +158,7 @@ app.post("/dashboard/database/:id/revoke",logged,verifyOrigin,async(req,res)=>{
 app.get("/dashboard/logs",logged,async(req,res)=>{
  try{
   const r=await pool.query("SELECT id,event_type,actor,detail,created_at FROM audit_logs ORDER BY id DESC LIMIT 300");
-  const content=`<div class="top"><div><h1>Logs</h1><p class="muted">Latest 300 audit events</p></div></div><div class="card"><div class="wrap"><table><tr><th>Time UTC</th><th>Event</th><th>Actor</th><th>Details</th></tr>${r.rows.map(x=>`<tr><td>${esc(new Date(x.created_at).toISOString().replace("T"," ").slice(0,19))}</td><td>${esc(x.event_type)}</td><td>${esc(x.actor)}</td><td><pre>${esc(JSON.stringify(x.detail))}</pre></td></tr>`).join("")||"<tr><td colspan=4>No log entries yet.</td></tr>"}</table></div></div>`;
+  const content=`<div class="top"><div><h1>Logs</h1><p class="muted">Latest 300 audit events</p></div></div><div class="card"><div class="wrap"><table><tr><th>Time UTC</th><th>Event</th><th>Actor</th><th>Details</th></tr>${r.rows.map(x=>`<tr><td>${esc(new Date(x.created_at).toISOString().replace("T"," ").slice(0,19))}</td><td>${esc(x.event_type)}</td><td>${esc(displayActor(x.actor))}</td><td><pre>${esc(displayDetail(x.detail))}</pre></td></tr>`).join("")||"<tr><td colspan=4>No log entries yet.</td></tr>"}</table></div></div>`;
   res.send(shell("logs",req.session.owner,content));
  }catch(e){console.error(e);res.status(500).send("Logs failed to load.");}
 });
