@@ -31,7 +31,7 @@ function equal(a,b) { const x=Buffer.from(String(a)), y=Buffer.from(String(b)); 
 function verify(pw, h) { try { const [alg,salt,expected]=h.split("$"); if(alg!=="scrypt") return false; const got=crypto.scryptSync(pw,Buffer.from(salt,"hex"),32,{N:16384,r:8,p:1}).toString("hex"); return equal(got,expected); } catch { return false; } }
 function esc(s) { return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 const DISCORD_OWNER_LABELS = {
- "1426813617394946068": "You (Civwest)",
+ "1426813617394946068": "Civwest",
  "1481562091520262236": "Jacob"
 };
 function displayActor(actor) {
