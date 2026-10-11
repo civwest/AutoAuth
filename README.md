@@ -1,20 +1,28 @@
-# Render Discord Bot Starter
+# AutoAuth Render rebuild
 
-This starter is designed to run on Render. You do not need to install Node.js or dependencies on your computer.
+Implements OAuth account linking and admin-only `/addusers`:
+- Users authorize at `/auth` or with the `/auth` Discord command.
+- Callback stores the Discord user ID and encrypted OAuth access/refresh tokens in PostgreSQL.
+- An administrator runs `/addusers` in the target server; every saved authorized account is added to that server if not already a member.
 
-## Deploy on Render
+## Render settings
+Build command: `yarn` (or `npm install`)
+Start command: `node index.js` (or `npm start`)
 
-1. Upload these files to a new branch in your GitHub repository.
-2. In Render, create a Web Service and connect that repository and branch.
-3. Set Build Command to `npm install`.
-4. Set Start Command to `npm start`.
-5. In Render Environment settings, add `BOT_TOKEN` with your Discord bot token as its value.
-6. Deploy the service.
+Add environment variables in Render:
+- `BOT_TOKEN`: Discord bot token
+- `CLIENT_ID`: Discord application ID
+- `CLIENT_SECRET`: OAuth2 client secret
+- `REDIRECT_URI`: `https://YOUR-RENDER-SERVICE.onrender.com/oauth/callback`
+- `DATABASE_URL`: connection URL for a Render PostgreSQL database
+- `TOKEN_ENCRYPTION_KEY`: 64 hexadecimal characters (32 bytes)
 
-Render supplies the `PORT` environment variable automatically.
+Create a PostgreSQL database in Render and use its internal connection URL. Do not commit secrets to GitHub.
 
-## Important
+## Discord setup
+1. In Developer Portal > OAuth2 > Redirects, add the exact `REDIRECT_URI` from Render.
+2. Invite the bot with `bot` and `applications.commands` scopes to every server where it should operate.
+3. Ensure the bot has permission to add members / manage server members.
+4. `/addusers` is registered globally and may take a while to appear.
 
-- Never commit your real bot token or share it in chat.
-- Do not upload `node_modules`.
-- This is only the clean starting point. Slash commands, OAuth2, and storage have not been added yet.
+Users must approve the `identify` and `guilds.join` OAuth scopes. Only users who authorized AutoAuth are eligible. The bot adds them to the server where the admin invokes `/addusers`.
