@@ -33,3 +33,13 @@ Images: save the background as `public/bg.webp` and the logo/favicon as `public/
 
 ## Commands
 `/auth`, `/optout` (user deletes own saved data and revokes the grant), `/addusers` and `/adduser` (admins).
+
+## Dashboard additions
+Bot Control: uptime, gateway latency, memory, new authorizations (24h/7d), opt-outs, failed logins, recent activity, server join dates. Database: token status and CSV export (no tokens). Logs: filter by event type, search, pagination. The sidebar stays pinned while scrolling.
+`/auth` replies with a permanent link (`/auth` on this site) that creates a fresh authorization link each time it is clicked, so it never goes stale.
+
+Dashboard "Add all users" (per server on Bot Control) runs the same logic as `/addusers` in the background; the result appears on the server row and in Logs.
+
+Bot Control has a Quick actions card: "Add users to a server" (popup list of servers) and "Opt out a user" (popup list of authorized users, searchable). Dashboard opt-out does the same as `/optout`.
+
+`/auth` is an explanation page with a "Continue with Discord" button (`/auth/start` makes the fresh Discord link and redirects). A bare redirect on a shared host tends to get flagged by Safe Browsing.
