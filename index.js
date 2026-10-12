@@ -18,7 +18,17 @@ app.use(express.urlencoded({ extended: false, limit: "20kb" }));
 app.use(session({ name:"autoauth.sid", secret:process.env.SESSION_SECRET, resave:false, saveUninitialized:false, rolling:false,
   store:new PgSession({ pool, tableName:"dashboard_sessions", createTableIfMissing:true, ttl:2*60*60 }),
   cookie:{ httpOnly:true, secure:"auto", sameSite:"lax", maxAge:2*60*60*1000 } }));
-const client = new Client({ intents:[GatewayIntentBits.Guilds] });
+// The Discord client is re-created on every (re)connect, because a destroyed discord.js client cannot reliably log in again.
+// `client` is a stable proxy that always points at the current instance, so other modules never hold a dead client.
+let realClient = null;
+const client = new Proxy({}, { get(_, k) { const v = realClient ? realClient[k] : undefined; return typeof v === "function" ? v.bind(realClient) : v; } });
+function freshClient() {
+ const c = new Client({ intents:[GatewayIntentBits.Guilds] });
+ c.once("ready",()=>console.log(`Discord bot logged in as ${c.user.tag}`));
+ c.on("error",e=>console.error("Discord error",e));
+ c.on("interactionCreate",i=>onInteraction(i));
+ return c;
+}
 const owners = [
  {user:process.env.DASHBOARD_OWNER1_USER, hash:process.env.DASHBOARD_OWNER1_PASSWORD_HASH},
  {user:process.env.DASHBOARD_OWNER2_USER, hash:process.env.DASHBOARD_OWNER2_PASSWORD_HASH}
@@ -169,7 +179,7 @@ async function connectDiscord() {
  discordState.connecting=true;
  try{
   console.log("Connecting to Discord...");
-  if(discordState.attempted){ try{ await withTimeout(Promise.resolve(client.destroy()),10000,"destroy"); }catch{} }
+  if(discordState.attempted&&realClient){ const old=realClient; try{ await withTimeout(Promise.resolve(old.destroy()),10000,"destroy"); }catch{} realClient=freshClient(); }
   discordState.attempted=true;
   register().then(()=>console.log("Slash commands registered."),e=>console.warn("Command registration failed:",e.message));
   await withTimeout(client.login(process.env.BOT_TOKEN),45000,"Discord login");
@@ -179,7 +189,7 @@ async function connectDiscord() {
   console.error("Discord login failed:",e.message);
  }finally{ discordState.connecting=false; }
 }
-async function shutdownBot(){ discordState.paused=true; try{ await client.destroy(); }catch(e){ console.warn("Shutdown error:",e.message); } }
+async function shutdownBot(){ discordState.paused=true; try{ await realClient.destroy(); }catch(e){ console.warn("Shutdown error:",e.message); } }
 setInterval(()=>{ if(!client.isReady()&&!discordState.paused) connectDiscord(); },60000).unref(); // automatic retry while disconnected
 
 async function register() {
@@ -217,9 +227,7 @@ require("./dashboard")({app,express,pool,client,esc,log,logged,verifyOrigin,disp
   core:{OWNER_IDS,isExpired,addUserToGuild,addAllToGuild,kickFromGuild,optOutUser,sendDmTo,connectDiscord,discordState,shutdownBot}});
 
 // ---------- Discord events ----------
-client.once("ready",()=>console.log(`Discord bot logged in as ${client.user.tag}`));
-client.on("error",e=>console.error("Discord error",e));
-client.on("interactionCreate",async i=>{
+const onInteraction=async i=>{
  if(!i.isChatInputCommand())return;
  if(i.commandName==="auth"){
   await log("auth_command_used",{user_id:i.user.id,guild_id:i.guildId},i.user.id);
@@ -275,7 +283,8 @@ client.on("interactionCreate",async i=>{
  const {added,already,failed,skipped,examples}=res;
  await log("addusers_finished",{guild_id:i.guildId,guild_name:i.guild.name,admin_id:i.user.id,total:res.total,added,already,failed,skipped},i.user.id);
  return i.editReply(`Finished for **${i.guild.name}**.\nAdded: **${added}**\nAlready in server: **${already}**\nFailed: **${failed}**${skipped?`\nSkipped (expired): **${skipped}**`:""}${examples.length?"\n\n"+examples.join("\n"):""}`);
-});
+};
+realClient=freshClient();
 app.listen(port,"0.0.0.0",()=>console.log(`HTTP server listening on port ${port}`));
 (async()=>{
  try{ await schema(); }catch(e){ console.error("Database setup failed",e); process.exit(1); }

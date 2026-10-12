@@ -15,8 +15,8 @@ Everything personal to the original owner is listed here. Edit these before push
 | `index.js` | `DISCORD_OWNER_LABELS` (near the top, ~line 33) | Replace the two Discord **user IDs** and names with your own owners. These IDs are the owners that kick-all skips and that show by name in Logs. Add or remove lines as needed. |
 | `site.js` | `LINKS` object (top of file, ~line 8) | `docs` = your GitHub repo URL (the Documentation tab opens it), plus your own `tiktok`, `youtube`, `x`, `twitch` and `discord` invite links used in the footer. |
 | `site.js` | `IMAGES` object (~line 17) | Fallback Discord CDN image links. Safe to leave; they are only used if `public/bg.webp` or `public/icon.webp` is missing. |
-| `bg.webp` | file | Replace with your own background photo (same file name). |
-| `icon.webp` | file | Replace with your own site icon / favicon (same file name). |
+| `public/bg.webp` | file | Replace with your own background photo (same file name). |
+| `public/icon.webp` | file | Replace with your own site icon / favicon (same file name). |
 | `site.js` | privacy policy and TOS text (search for "civwest") | The legal text says the project is "run by civwest". Change the name and contact details to yours. |
 | `site.js` | `GOOGLE_VERIFICATION_FILE` default, `google955a81d5fc1c3942.html` (~line 275) | Only if you use Google Search Console. Better: set the `GOOGLE_VERIFICATION_FILE` environment variable (see below) instead of editing the file. |
 | `dashboard.js` | the "Add bot to server" link in the sidebar (~line 97) | Replace `client_id=1558725033579249816` with **your** Application ID. `permissions=8` is Administrator, which kicking requires. |

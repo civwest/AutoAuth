@@ -64,7 +64,8 @@ Run automatically at startup (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`): `serv
 ## README
 The README is now a setup guide: files to edit (with locations), Developer Portal steps, every Render environment variable and where to find it, and a first-start checklist.
 
-## v1.3.2
+## v1.3.3
 - Captcha: a rate-limited or failed captcha request now shows a clear message instead of leaving a broken image and empty token. Limits raised (captcha 150 and sign-in starts 40 per 10 minutes per IP). The captcha refreshes itself every 4 minutes so it cannot silently expire while the agreement dialog is open.
 - Captcha made easier to read: no look-alike characters (0/O, 1/I, 5/S, 2/Z, 8/B, 6/G removed), less rotation and noise, bigger text, not case sensitive.
 - Dashboard: **Shut down bot** (disconnects the Discord bot and stops auto-reconnect; the site and dashboard stay up; **Start bot** brings it back) and **Restart service** (exits the process so Render starts it again). A full stop of the Render service itself is done from Render (Suspend).
+- Bot reconnect: the Discord client is now created fresh on every connect/start. A destroyed discord.js client could not log in again, which is why **Start bot** failed after **Shut down bot**. A stable proxy keeps the dashboard and site pointed at the current client. Reconnecting needs nothing from startup: only `BOT_TOKEN` and `CLIENT_ID`.
