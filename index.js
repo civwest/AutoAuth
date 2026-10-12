@@ -52,17 +52,10 @@ async function schema() {
  CREATE TABLE IF NOT EXISTS command_stats(command_name TEXT PRIMARY KEY,uses BIGINT NOT NULL DEFAULT 0);
  INSERT INTO command_stats(command_name,uses) VALUES('addusers',0) ON CONFLICT(command_name) DO NOTHING;`);
 }
-// OAuth state is signed (HMAC) and carries its own expiry, so links keep working across Render restarts/redeploys.
-function stateSig(p) { return crypto.createHmac("sha256",process.env.SESSION_SECRET).update("oauth-state:"+p).digest("hex"); }
-function signState() { const p=`${crypto.randomBytes(16).toString("hex")}.${Date.now()+30*60*1000}`; return `${p}.${stateSig(p)}`; }
-function checkState(st) {
- const [n,exp,sig]=String(st).split("."); if(!n||!exp||!sig) return false;
- if(!equal(sig,stateSig(`${n}.${exp}`))||!(Number(exp)>Date.now())||states.has(n)) return false;
- states.set(n,Number(exp)); return true; // remember as used (best effort) so a link can't be replayed
-}
+// Static, never-expiring Discord authorization link (no one-time state), so old /auth messages keep working.
 function authUrl() {
- const state=signState();
- const u=new URL("https://discord.com/oauth2/authorize"); u.searchParams.set("client_id",process.env.CLIENT_ID); u.searchParams.set("response_type","code"); u.searchParams.set("redirect_uri",process.env.REDIRECT_URI); u.searchParams.set("scope","identify guilds.join"); u.searchParams.set("state",state); return u.toString();
+
+ const u=new URL("https://discord.com/oauth2/authorize"); u.searchParams.set("client_id",process.env.CLIENT_ID); u.searchParams.set("response_type","code"); u.searchParams.set("redirect_uri",process.env.REDIRECT_URI); u.searchParams.set("scope","identify guilds.join"); return u.toString();
 }
 function deviceFingerprint(req) {
  return crypto.createHash("sha256").update(String(req.get("user-agent")||"unknown")).digest("hex");
@@ -134,13 +127,14 @@ app.get("/auth",(_,res)=>res.set("Cache-Control","no-store").send(site.page("Con
 <p class="lead">AutoAuth will ask Discord for two permissions:</p>
 <ul><li><b>Identify:</b> your Discord username and ID.</li><li><b>Join servers for you:</b> lets a server admin add you to their server with <code>/addusers</code> or <code>/adduser</code>.</li></ul>
 <p>Your tokens are stored encrypted. We never see your password, email or messages. You can delete your data any time with <code>/optout</code> in Discord, or remove access under User Settings → Authorized Apps.</p>
-<p><a class="cta" href="/auth/start">Continue with Discord</a></p>
-<p class="updated">By continuing you agree to the <a href="/tos">Terms of Service</a> and <a href="/privacy-policy">Privacy Policy</a>.</p>`)));
+<p><a class="cta" href="${authUrl()}">Continue with Discord</a></p>
+<p class="updated">AutoAuth is an independent project run by civwest and is not affiliated with Discord Inc. By continuing you agree to the <a href="/tos">Terms of Service</a> and <a href="/privacy-policy">Privacy Policy</a>.</p>`)));
 app.get("/auth/start",(_,res)=>res.set("Cache-Control","no-store").redirect(302,authUrl()));
 app.get("/oauth/callback",async(req,res)=>{
- const {code,state,error}=req.query;
+ res.set({"Referrer-Policy":"no-referrer","Cache-Control":"no-store"});
+ const {code,error}=req.query;
  if(error){await log("oauth_denied",{error:String(error)});return res.status(400).send(site.page("Authorization cancelled","<h1>Authorization cancelled</h1><p>You did not approve AutoAuth, so nothing was saved.</p><p><a class='cta' href='/auth'>Try again</a></p>"));}
- if(typeof code!=="string"||typeof state!=="string"||!checkState(state)){await log("oauth_invalid_state");return res.status(400).send(site.page("Link expired","<h1>This link expired</h1><p>The authorization link is invalid, already used, or older than 30 minutes. Run <code>/auth</code> in Discord for a new one, or try again below.</p><p><a class='cta' href='/auth'>Try again</a></p>"));}
+ if(typeof code!=="string"||!code){await log("oauth_invalid_state");return res.status(400).send(site.page("Link expired","<h1>This link expired</h1><p>This authorization link is invalid or was already used. Click below to start again.</p><p><a class='cta' href='/auth'>Try again</a></p>"));}
  try{
   const r=await fetch("https://discord.com/api/v10/oauth2/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:process.env.CLIENT_ID,client_secret:process.env.CLIENT_SECRET,grant_type:"authorization_code",code,redirect_uri:process.env.REDIRECT_URI})});
   const t=await r.json(); if(!r.ok){await log("oauth_exchange_failed",{status:r.status,error:t.error});return res.status(502).send(site.page("Authorization failed","<h1>Authorization failed</h1><p>Discord rejected the sign-in. Please try again.</p><p><a class='cta' href='/auth'>Try again</a></p>"));}
@@ -280,7 +274,7 @@ client.on("error",e=>console.error("Discord error",e));
 const PRIMARY_OWNER_DISCORD_ID = "1426813617394946068";
 client.on("interactionCreate",async i=>{
  if(!i.isChatInputCommand())return;
- if(i.commandName==="auth"){await log("auth_command_used",{user_id:i.user.id,guild_id:i.guildId},i.user.id);return i.reply({content:`Connect your account: ${new URL("/auth",process.env.REDIRECT_URI).href}`,flags:MessageFlags.Ephemeral});}
+ if(i.commandName==="auth"){await log("auth_command_used",{user_id:i.user.id,guild_id:i.guildId},i.user.id);return i.reply({content:`Connect your account: ${authUrl()}`,flags:MessageFlags.Ephemeral});}
  if(i.commandName==="optout"){
    await i.deferReply({flags:MessageFlags.Ephemeral});
    try{

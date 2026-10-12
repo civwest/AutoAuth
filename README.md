@@ -42,4 +42,7 @@ Dashboard "Add all users" (per server on Bot Control) runs the same logic as `/a
 
 Bot Control has a Quick actions card: "Add users to a server" (popup list of servers) and "Opt out a user" (popup list of authorized users, searchable). Dashboard opt-out does the same as `/optout`.
 
-`/auth` is an explanation page with a "Continue with Discord" button (`/auth/start` makes the fresh Discord link and redirects). A bare redirect on a shared host tends to get flagged by Safe Browsing.
+`/auth` is an explanation page with a "Continue with Discord" button. The bot's `/auth` reply is a static Discord authorization link (no one-time state), so it never expires.
+
+## Google Search Console verification
+Set one of these in Render, then verify: `GOOGLE_SITE_VERIFICATION` (the content value of the `<meta name="google-site-verification">` tag) or `GOOGLE_VERIFICATION_FILE` (the file name, e.g. `google1234abcd.html`).

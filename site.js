@@ -71,6 +71,7 @@ function layout({ title, active, gap = "72vh", body }) {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title}</title>
 <meta name="description" content="AutoAuth is a Discord bot that adds authorized members to your server.">
+${/^[\w-]{20,100}$/.test(process.env.GOOGLE_SITE_VERIFICATION || "") ? `<meta name="google-site-verification" content="${process.env.GOOGLE_SITE_VERIFICATION}">` : ""}
 <link rel="icon" type="image/webp" href="/assets/icon.webp">
 <link rel="apple-touch-icon" href="/assets/icon.webp">
 <style>${CSS}</style></head><body>
@@ -85,7 +86,8 @@ function layout({ title, active, gap = "72vh", body }) {
 <footer>
 <div class="fcol"><h3>About AutoAuth</h3>
 <p>AutoAuth is a Discord bot that lets members link their account once, so server admins can add them to a server without sending invites.</p>
-<p>Your account is saved with encrypted tokens, and you can remove access any time in Discord under User Settings → Authorized Apps.</p></div>
+<p>Your account is saved with encrypted tokens, and you can remove access any time in Discord under User Settings → Authorized Apps.</p>
+<p style="font-size:13px;color:#9ca3af">AutoAuth is an independent project run by civwest. It is not affiliated with, endorsed by, or sponsored by Discord Inc.</p></div>
 <div class="fcol"><h3>What it can do</h3>
 <ul>
 <li><code>/auth</code> Get a private link to connect your Discord account.</li>
@@ -218,6 +220,11 @@ module.exports = function mountSite(app, client) {
     if (fs.existsSync(local)) return res.type("image/webp").set("Cache-Control", "public, max-age=86400").sendFile(local);
     return res.redirect(302, IMAGES[f]);
   });
+  // Google Search Console HTML-file verification: set GOOGLE_VERIFICATION_FILE=googleXXXXXXXX.html in Render.
+  app.get(/^\/google[0-9a-f]{8,}\.html$/, (req, res) =>
+    req.path.slice(1) === (process.env.GOOGLE_VERIFICATION_FILE || "google955a81d5fc1c3942.html")
+      ? res.type("text/html").send("google-site-verification: " + req.path.slice(1))
+      : res.status(404).end());
   app.get("/favicon.ico", (_, res) => res.redirect(301, "/assets/icon.webp"));
 
   app.get("/", (_, res) =>
