@@ -158,7 +158,7 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
     if (limited("optout:" + (req.ip || "?"), 15, 10 * 60 * 1000)) return res.status(429).send("Too many attempts. Try again later.");
     return res.set("Cache-Control", "no-store").redirect(303, discordUrlFor("optout"));
   });
-  app.post("/optout/confirm", verifyOrigin, async (req, res) => {
+  app.post("/optout/confirm", async (req, res) => {
     const [uid, exp, n, sig] = String((req.body || {}).ticket || "").split(".");
     const type = String((req.body || {}).type || "");
     if (!uid || !exp || !n || !sig || !equal(sig, hmac(`optout:${uid}.${exp}.${n}`)) || !(Number(exp) > Date.now()) || used.has("o" + n) || !["server", "dm", "all"].includes(type)) {

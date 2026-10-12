@@ -59,3 +59,7 @@ Run automatically at startup (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`): `serv
 - Confirmation uses a signed, single-use, 10-minute ticket. Routes: `GET /optout`, `POST /optout/start`, `POST /optout/confirm`.
 - The site (home, info, FAQ, policies, auth page) and the `/optout` bot replies now link to it.
 - Add `identify` redirect is the same `/oauth/callback`; no Developer Portal change is needed.
+- `/optout/confirm` no longer uses the Origin check: the callback page sends `Referrer-Policy: no-referrer`, so browsers post `Origin: null` from it. The signed single-use ticket already protects against forged requests.
+
+## README
+The README is now a setup guide: files to edit (with locations), Developer Portal steps, every Render environment variable and where to find it, and a first-start checklist.

@@ -1,50 +1,100 @@
-# AutoAuth Dashboard
+# AutoAuth
 
-The main Bot Control page displays the bot's Discord gateway connection and actual Discord presence (online/idle/DND/invisible), authorized-user count, `/addusers` usage count, log count, and guild list. Owners can change the Discord presence and activity from the page.
+A Discord bot plus website and owner dashboard. People authorize on the website; server admins add them with `/addusers` or `/adduser`; owners manage everything from the dashboard. Hosted on Render with PostgreSQL.
 
-Tabs:
-- Bot Control
-- Database: search linked accounts and revoke saved OAuth credentials.
-- Logs: recent OAuth, dashboard login, presence, and `/addusers` audit events.
+See [UPDATES.md](UPDATES.md) for a description of every feature and recent change.
 
-Login URL: `/login`. The dashboard at `/dashboard` redirects unauthenticated visitors to `/login`. The old `/dashboard/login` URL redirects to `/login`.
+---
 
-## Render
-Build command: `yarn` (or `npm install`)
-Start command: `node index.js` (or `npm start`)
+## 1. Before you deploy: what to change in the files
 
-Required Render environment values: BOT_TOKEN, CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, DATABASE_URL, TOKEN_ENCRYPTION_KEY (64 hex chars), SESSION_SECRET, DASHBOARD_OWNER1_USER=civwest, DASHBOARD_OWNER1_PASSWORD_HASH, DASHBOARD_OWNER2_USER=jacob, DASHBOARD_OWNER2_PASSWORD_HASH.
+Everything personal to the original owner is listed here. Edit these before pushing to GitHub.
 
-The owner password hashes are generated separately for this delivery. Copy them from the assistant response into Render Environment; do not commit the hashes or passwords to GitHub. OAuth redirect URL must exactly match the Discord Developer Portal entry.
+| File | Where | What to change |
+|---|---|---|
+| `index.js` | `DISCORD_OWNER_LABELS` (near the top, ~line 33) | Replace the two Discord **user IDs** and names with your own owners. These IDs are the owners that kick-all skips and that show by name in Logs. Add or remove lines as needed. |
+| `site.js` | `LINKS` object (top of file, ~line 8) | `docs` = your GitHub repo URL (the Documentation tab opens it), plus your own `tiktok`, `youtube`, `x`, `twitch` and `discord` invite links used in the footer. |
+| `site.js` | `IMAGES` object (~line 17) | Fallback Discord CDN image links. Safe to leave; they are only used if `public/bg.webp` or `public/icon.webp` is missing. |
+| `public/bg.webp` | file | Replace with your own background photo (same file name). |
+| `public/icon.webp` | file | Replace with your own site icon / favicon (same file name). |
+| `site.js` | privacy policy and TOS text (search for "civwest") | The legal text says the project is "run by civwest". Change the name and contact details to yours. |
+| `site.js` | `GOOGLE_VERIFICATION_FILE` default, `google955a81d5fc1c3942.html` (~line 275) | Only if you use Google Search Console. Better: set the `GOOGLE_VERIFICATION_FILE` environment variable (see below) instead of editing the file. |
+| `dashboard.js` | the "Add bot to server" link in the sidebar (~line 97) | Replace `client_id=1558725033579249816` with **your** Application ID. `permissions=8` is Administrator, which kicking requires. |
+| `auth.js` | none | Auth links are built from `CLIENT_ID` and `REDIRECT_URI`; nothing to edit. |
+| `env.example` | all values | Reference only. Never commit real values. Set them in Render. |
 
-The PostgreSQL schema is created automatically. Dashboard sessions are stored in Express's in-memory session store and will log out on service restarts; that is acceptable for a small personal dashboard. Audit logs and authorization records persist in PostgreSQL.
-\n\nDashboard server controls: the Servers table has a Leave server action for each guild; it asks for confirmation and records the action in Logs. Audit log actor IDs 1426813617394946068 and 1481562091520262236 are displayed as You (Civwest) and Jacob, respectively.\n
+## 2. Discord Developer Portal (https://discord.com/developers/applications)
 
-## Session security and owner-only add commands
-- Dashboard sessions are stored in PostgreSQL, bound to the browser's User-Agent fingerprint, and expire after 2 hours. Refreshing or closing/reopening the page in the same browser keeps the session until it expires.
-- The `/addusers` and `/adduser user_id` commands require the Discord Administrator permission. `/adduser` adds one account that has already completed `/auth`. The commands also enforce Administrator permission at runtime.
-- The bot's application-install visibility must also be restricted in the Discord Developer Portal if you want to prevent other people from using an installation link to add the bot to their servers. Code-level command restrictions prevent others from running the bulk/single-user add commands.
-- New dependency `connect-pg-simple` uses the existing `DATABASE_URL`; no new database service is required.
+1. **Bot tab:** create the bot and copy the token, which becomes `BOT_TOKEN`. No privileged intents are needed.
+2. **General Information:** copy the **Application ID** (`CLIENT_ID`).
+3. **OAuth2 tab:** copy the **Client Secret** (`CLIENT_SECRET`).
+4. **OAuth2 > Redirects:** add exactly `https://YOUR-SITE/oauth/callback` (for example `https://autoauth.cfd/oauth/callback`). It must match `REDIRECT_URI` character for character.
+5. **Installation tab:** enable **User Install** (needed for the DM authorization option) and **Guild Install**.
+6. Optionally restrict who can add the bot: untick **Public Bot** on the Bot tab.
 
-## Public website
-`site.js` serves `/` (bot status), `/info`, `/tos` and `/privacy-policy`; `/home` redirects to `/`. The dashboard and `/login` are unchanged.
+## 3. Render setup
 
-Images: save the background as `public/bg.webp` and the logo/favicon as `public/icon.webp`. They are served at `/assets/bg.webp` and `/assets/icon.webp`. If those files are missing, the site falls back to the original Discord CDN links, which expire.
+1. Create a **PostgreSQL** database on Render. Copy its **Internal Database URL**; this is `DATABASE_URL`.
+2. Create a **Web Service** from your GitHub repo.
+   - Build command: `yarn` (or `npm install`)
+   - Start command: `node index.js`
+   - Node 20 or newer.
+3. In the web service, open **Environment** and add the variables below.
+4. **Custom domain** (optional): web service > Settings > Custom Domains. Add your domain and create the DNS records Render shows. Then set `REDIRECT_URI` to the new domain and update the Discord redirect (step 2.4).
 
-## Commands
-`/auth`, `/optout` (user deletes own saved data and revokes the grant), `/addusers` and `/adduser` (admins).
+### Environment variables
 
-## Dashboard additions
-Bot Control: uptime, gateway latency, memory, new authorizations (24h/7d), opt-outs, failed logins, recent activity, server join dates. Database: token status and CSV export (no tokens). Logs: filter by event type, search, pagination. The sidebar stays pinned while scrolling.
-`/auth` replies with a permanent link (`/auth` on this site) that creates a fresh authorization link each time it is clicked, so it never goes stale.
+| Variable | Where to get it |
+|---|---|
+| `BOT_TOKEN` | Developer Portal > Bot > Reset Token |
+| `CLIENT_ID` | Developer Portal > General Information > Application ID |
+| `CLIENT_SECRET` | Developer Portal > OAuth2 > Client Secret |
+| `REDIRECT_URI` | `https://YOUR-SITE/oauth/callback`. Your site is the address Render shows at the top of the web service (`https://something.onrender.com`) or your custom domain. The public site address and legal text also follow this value. |
+| `DATABASE_URL` | Render PostgreSQL > Connections > Internal Database URL |
+| `TOKEN_ENCRYPTION_KEY` | 64 hex characters. Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. **Never change it later or saved tokens become unreadable.** |
+| `SESSION_SECRET` | Any long random string (also signs auth links and captchas). Changing it invalidates in-flight sign-ins. |
+| `DASHBOARD_OWNER1_USER` / `DASHBOARD_OWNER2_USER` | Dashboard usernames you choose. |
+| `DASHBOARD_OWNER1_PASSWORD_HASH` / `DASHBOARD_OWNER2_PASSWORD_HASH` | scrypt hash in the form `scrypt$<saltHex>$<hashHex>`. Generate with the command below. |
+| `DATABASE_SSL` | Optional. Set to `disable` only for a local database. |
+| `GOOGLE_VERIFICATION_FILE` | Optional. The name of Google's verification file (e.g. `google1234abcd.html`); the site serves it at that path. |
+| `GOOGLE_SITE_VERIFICATION` | Optional. The meta-tag content value, as an alternative to the file. |
 
-Dashboard "Add all users" (per server on Bot Control) runs the same logic as `/addusers` in the background; the result appears on the server row and in Logs.
+Generate a password hash (replace `YOUR_PASSWORD`):
 
-Bot Control has a Quick actions card: "Add users to a server" (popup list of servers) and "Opt out a user" (popup list of authorized users, searchable). Dashboard opt-out does the same as `/optout`.
+```
+node -e "const c=require('crypto');const s=c.randomBytes(16);console.log('scrypt\$'+s.toString('hex')+'\$'+c.scryptSync('YOUR_PASSWORD',s,32,{N:16384,r:8,p:1}).toString('hex'))"
+```
 
-`/auth` is an explanation page with a "Continue with Discord" button. The bot's `/auth` reply is a static Discord authorization link (no one-time state), so it never expires.
+Keep real passwords, tokens and hashes out of GitHub.
 
-## Google Search Console verification
-Set one of these in Render, then verify: `GOOGLE_SITE_VERIFICATION` (the content value of the `<meta name="google-site-verification">` tag) or `GOOGLE_VERIFICATION_FILE` (the file name, e.g. `google1234abcd.html`).
+## 4. First start checklist
 
-See [UPDATES.md](UPDATES.md) for a full description of the latest changes.
+- Render logs should show `HTTP server listening`, `Connecting to Discord...`, then `Discord bot logged in as ...`. If you see `Discord login failed`, check `BOT_TOKEN`; the dashboard also has a Retry button.
+- The database tables and columns are created automatically.
+- Invite the bot with the "Add bot to server" link in the dashboard sidebar.
+- Visit `/` (site), `/auth` (authorization), `/optout`, `/login` (dashboard).
+
+## 5. Pages and routes
+
+| Route | Purpose |
+|---|---|
+| `/` , `/info` | Public home and info pages |
+| `/auth` | Authorization page: server joins, DMs, or both, each with an agreement and captcha |
+| `/optout` | Self-service opt-out (Discord sign-in, then choose server / DM / everything) |
+| `/terms-of-service`, `/privacy-policy` | Legal pages (`/tos` redirects) |
+| `/login`, `/dashboard` | Owner dashboard: Bot Control, Database, DM Users, Logs |
+| `/health` | Plain health check |
+
+## 6. Commands
+
+- `/auth`: link to the website authorization page.
+- `/optout [type]`: opt out of `server`, `dm` or everything.
+- `/addusers`: Administrator only. Adds all server-authorized users to the server.
+- `/adduser user_id`: Administrator only. Adds one authorized user.
+
+## 7. Notes
+
+- Authorizations never expire unless an owner sets an expiry in the dashboard Database tab.
+- DMs only arrive if the user's Discord privacy settings allow them.
+- The built-in captcha is basic. Cloudflare Turnstile or hCaptcha can be added later.
+- Dashboard sessions are stored in PostgreSQL and expire after 2 hours.
