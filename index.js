@@ -52,8 +52,16 @@ async function schema() {
  CREATE TABLE IF NOT EXISTS command_stats(command_name TEXT PRIMARY KEY,uses BIGINT NOT NULL DEFAULT 0);
  INSERT INTO command_stats(command_name,uses) VALUES('addusers',0) ON CONFLICT(command_name) DO NOTHING;`);
 }
+// OAuth state is signed (HMAC) and carries its own expiry, so links keep working across Render restarts/redeploys.
+function stateSig(p) { return crypto.createHmac("sha256",process.env.SESSION_SECRET).update("oauth-state:"+p).digest("hex"); }
+function signState() { const p=`${crypto.randomBytes(16).toString("hex")}.${Date.now()+30*60*1000}`; return `${p}.${stateSig(p)}`; }
+function checkState(st) {
+ const [n,exp,sig]=String(st).split("."); if(!n||!exp||!sig) return false;
+ if(!equal(sig,stateSig(`${n}.${exp}`))||!(Number(exp)>Date.now())||states.has(n)) return false;
+ states.set(n,Number(exp)); return true; // remember as used (best effort) so a link can't be replayed
+}
 function authUrl() {
- const state=crypto.randomBytes(32).toString("hex"); states.set(state,Date.now()+600000);
+ const state=signState();
  const u=new URL("https://discord.com/oauth2/authorize"); u.searchParams.set("client_id",process.env.CLIENT_ID); u.searchParams.set("response_type","code"); u.searchParams.set("redirect_uri",process.env.REDIRECT_URI); u.searchParams.set("scope","identify guilds.join"); u.searchParams.set("state",state); return u.toString();
 }
 function deviceFingerprint(req) {
@@ -86,23 +94,22 @@ function shell(tab,owner,content) {
  </style></head><body><div class="layout"><aside class="side"><div class="brand">◈ AutoAuth</div><nav class="nav">
  <a class="${tab==="home"?"on":""}" href="/dashboard">Bot Control</a><a class="${tab==="db"?"on":""}" href="/dashboard/database">Database</a><a class="${tab==="logs"?"on":""}" href="/dashboard/logs">Logs</a></nav><p class="muted" style="margin:28px 12px">Signed in as <b>${esc(owner)}</b></p><form method="post" action="/dashboard/logout"><button class="secondary" style="width:100%">Log out</button></form><a class="btn secondary addbot" style="display:block;width:100%;margin-top:10px;text-align:center;font:650 13.333px Arial,sans-serif" href="https://discord.com/oauth2/authorize?client_id=1558725033579249816&amp;permissions=8&amp;integration_type=0&amp;scope=bot" target="_blank" rel="noopener">Add bot to server</a></aside><main>${content}</main></div></body></html>`;
 }
-require("./site")(app,client); // public site: /, /info, /tos, /privacy-policy
+const site=require("./site")(app,client); // public site: /, /info, /tos, /privacy-policy
 app.get("/health",(_,res)=>res.send("ok"));
 app.get("/auth",(_,res)=>res.redirect(302,authUrl()));
 app.get("/oauth/callback",async(req,res)=>{
  const {code,state,error}=req.query;
- if(error){await log("oauth_denied",{error:String(error)});return res.status(400).send("Authorization cancelled or denied.");}
- if(typeof code!=="string"||typeof state!=="string"||!(states.get(state)>Date.now())){await log("oauth_invalid_state");return res.status(400).send("Authorization link expired or invalid. Open /auth and try again.");}
- states.delete(state);
+ if(error){await log("oauth_denied",{error:String(error)});return res.status(400).send(site.page("Authorization cancelled","<h1>Authorization cancelled</h1><p>You did not approve AutoAuth, so nothing was saved.</p><p><a class='cta' href='/auth'>Try again</a></p>"));}
+ if(typeof code!=="string"||typeof state!=="string"||!checkState(state)){await log("oauth_invalid_state");return res.status(400).send(site.page("Link expired","<h1>This link expired</h1><p>The authorization link is invalid, already used, or older than 30 minutes. Run <code>/auth</code> in Discord for a new one, or try again below.</p><p><a class='cta' href='/auth'>Try again</a></p>"));}
  try{
   const r=await fetch("https://discord.com/api/v10/oauth2/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:process.env.CLIENT_ID,client_secret:process.env.CLIENT_SECRET,grant_type:"authorization_code",code,redirect_uri:process.env.REDIRECT_URI})});
-  const t=await r.json(); if(!r.ok){await log("oauth_exchange_failed",{status:r.status,error:t.error});return res.status(502).send("Discord token exchange failed.");}
+  const t=await r.json(); if(!r.ok){await log("oauth_exchange_failed",{status:r.status,error:t.error});return res.status(502).send(site.page("Authorization failed","<h1>Authorization failed</h1><p>Discord rejected the sign-in. Please try again.</p><p><a class='cta' href='/auth'>Try again</a></p>"));}
   const ur=await fetch("https://discord.com/api/v10/users/@me",{headers:{Authorization:`Bearer ${t.access_token}`}}), u=await ur.json();
-  if(!ur.ok||!u.id){await log("oauth_user_fetch_failed",{status:ur.status});return res.status(502).send("Could not retrieve your Discord account.");}
+  if(!ur.ok||!u.id){await log("oauth_user_fetch_failed",{status:ur.status});return res.status(502).send(site.page("Authorization failed","<h1>Could not read your account</h1><p>Discord did not return your account details. Please try again.</p><p><a class='cta' href='/auth'>Try again</a></p>"));}
   await pool.query(`INSERT INTO authorized_users(user_id,username,access_token_enc,refresh_token_enc,expires_at,authorized_at) VALUES($1,$2,$3,$4,$5,NOW()) ON CONFLICT(user_id) DO UPDATE SET username=EXCLUDED.username,access_token_enc=EXCLUDED.access_token_enc,refresh_token_enc=EXCLUDED.refresh_token_enc,expires_at=EXCLUDED.expires_at,authorized_at=NOW()`,[u.id,u.global_name||u.username||u.id,enc(t.access_token),enc(t.refresh_token),Date.now()+Number(t.expires_in||604800)*1000]);
   await log("oauth_success",{user_id:u.id,username:u.global_name||u.username});
-  res.send("<h1>Discord connected</h1><p>Your account is saved. An admin can run /addusers in a server.</p>");
- }catch(e){await log("oauth_callback_error",{error:e.message});console.error(e);res.status(500).send("OAuth callback failed. Check Render logs.");}
+  res.send(site.page("Connected","<h1>You are connected</h1><p>Your Discord account is saved. A server admin can now add you with <code>/addusers</code> or <code>/adduser</code>.</p><p>To delete your data any time, run <code>/optout</code> in Discord.</p><p><a class=\"cta\" href=\"/\">Back to AutoAuth</a></p>"));
+ }catch(e){await log("oauth_callback_error",{error:e.message});console.error(e);res.status(500).send(site.page("Something went wrong","<h1>Something went wrong</h1><p>We could not finish connecting your account. Please try again in a moment.</p><p><a class='cta' href='/auth'>Try again</a></p>"));}
 });
 
 app.get("/dashboard/login",(req,res)=>res.redirect(302,"/login"));

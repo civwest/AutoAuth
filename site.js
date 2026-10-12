@@ -50,6 +50,7 @@ table{border-collapse:collapse;width:100%;margin:12px 0}
 td,th{text-align:left;padding:10px 12px;border-bottom:1px solid #e5e5e5;vertical-align:top}
 code{background:#f1f1f1;padding:2px 6px;border-radius:5px;font-size:.92em}
 .updated{color:#777;font-size:14px}
+.cta{display:inline-block;background:#000;color:#fff;text-decoration:none;font-weight:600;padding:11px 22px;border-radius:10px}.cta:hover{background:#222}
 footer{background:#000;color:#fff;padding:64px 28px 48px;min-height:260px;display:grid;grid-template-columns:1fr 1fr auto;gap:48px;align-items:start}
 .fcol h3{margin:0 0 14px;font-size:20px;font-weight:700;color:#fff}.fcol p,.fcol li{color:#d1d5db;font-size:15px;line-height:1.7;margin:0 0 10px}.fcol ul{margin:0;padding:0;list-style:none}.fcol code{background:#1f2937;color:#fff;padding:2px 6px;border-radius:5px;font-size:.92em}
 .foot{text-align:right}
@@ -208,6 +209,7 @@ const tosBody = `
 <p>Questions: join the <a href="${LINKS.discord}" target="_blank" rel="noopener">Discord server</a>.</p>`;
 
 module.exports = function mountSite(app, client) {
+  const page = (title, body) => layout({ title: title + " | AutoAuth", gap: "20vh", body });
   // Images: serve local copy from ./public when present, otherwise fall back to the Discord CDN link.
   app.get("/assets/:file", (req, res) => {
     const f = req.params.file;
@@ -227,4 +229,5 @@ module.exports = function mountSite(app, client) {
     res.send(layout({ title: "Terms of Service | AutoAuth", gap: "20vh", body: tosBody })));
   app.get("/privacy-policy", (_, res) =>
     res.send(layout({ title: "Privacy Policy | AutoAuth", gap: "20vh", body: privacyBody })));
+  return { page };
 };
