@@ -54,12 +54,14 @@ Everything personal to the original owner is listed here. Edit these before push
 | `TOKEN_ENCRYPTION_KEY` | 64 hex characters. Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. **Never change it later or saved tokens become unreadable.** |
 | `SESSION_SECRET` | Any long random string (also signs auth links and captchas). Changing it invalidates in-flight sign-ins. |
 | `DASHBOARD_OWNER1_USER` / `DASHBOARD_OWNER2_USER` | Dashboard usernames you choose. |
-| `DASHBOARD_OWNER1_PASSWORD_HASH` / `DASHBOARD_OWNER2_PASSWORD_HASH` | scrypt hash in the form `scrypt$<saltHex>$<hashHex>`. Generate with the command below. |
+| `DASHBOARD_OWNER1_PASSWORD_HASH` / `DASHBOARD_OWNER2_PASSWORD_HASH` | scrypt hash in the form `scrypt$<saltHex>$<hashHex>`. See "Dashboard passwords and hashes" below. |
 | `DATABASE_SSL` | Optional. Set to `disable` only for a local database. |
 | `GOOGLE_VERIFICATION_FILE` | Optional. The name of Google's verification file (e.g. `google1234abcd.html`); the site serves it at that path. |
 | `GOOGLE_SITE_VERIFICATION` | Optional. The meta-tag content value, as an alternative to the file. |
 
-Generate a password hash (replace `YOUR_PASSWORD`):
+**Dashboard passwords and hashes.** Each owner needs a password and a matching password hash. You type the password to log in; Render only stores the hash. The easiest way: ask your favorite AI (ChatGPT, Claude, Gemini, etc.) for **2 random passwords and their password hashes** in this format: `scrypt$<saltHex>$<hashHex>` (scrypt, N=16384, r=8, p=1, 32-byte key). Save the passwords somewhere safe, and put each hash into `DASHBOARD_OWNER1_PASSWORD_HASH` and `DASHBOARD_OWNER2_PASSWORD_HASH` in Render.
+
+If you would rather generate one yourself, run this (replace `YOUR_PASSWORD`):
 
 ```
 node -e "const c=require('crypto');const s=c.randomBytes(16);console.log('scrypt\$'+s.toString('hex')+'\$'+c.scryptSync('YOUR_PASSWORD',s,32,{N:16384,r:8,p:1}).toString('hex'))"
