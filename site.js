@@ -88,6 +88,7 @@ function layout({ title, active, gap = "72vh", body }) {
 <div class="fcol"><h3>What it can do</h3>
 <ul>
 <li><code>/auth</code> Get a private link to connect your Discord account.</li>
+<li><code>/optout</code> Opt out and delete your saved data.</li>
 <li><code>/addusers</code> Admins: add every authorized member to the server.</li>
 <li><code>/adduser</code> Admins: add one authorized member by user ID.</li>
 </ul></div>
@@ -122,6 +123,7 @@ const infoBody = `
 <table>
 <tr><th>Command</th><th>Who</th><th>What it does</th></tr>
 <tr><td><code>/auth</code></td><td>Anyone</td><td>Sends you a private link to authorize AutoAuth with your Discord account (scopes: identify, guilds.join).</td></tr>
+<tr><td><code>/optout</code></td><td>Anyone authorized</td><td>Revokes your authorization and deletes your saved data and related log entries.</td></tr>
 <tr><td><code>/addusers</code></td><td>Server administrators</td><td>Adds every authorized member who is not already in the server.</td></tr>
 <tr><td><code>/adduser user_id</code></td><td>Server administrators</td><td>Adds one authorized member, by Discord user ID, to the server.</td></tr>
 </table>
@@ -162,12 +164,12 @@ const privacyBody = `
 <p>Data is stored in a PostgreSQL database and the bot runs on Render. Discord processes the authorization and any data you give Discord under its own <a href="https://discord.com/privacy" target="_blank" rel="noopener">Privacy Policy</a>.</p>
 
 <h2>5. Retention</h2>
-<p>Authorization data is kept until you revoke it or ask us to delete it. Audit log entries are kept for security and troubleshooting and may remain after your authorization is removed.</p>
+<p>Authorization data is kept until you opt out with <code>/optout</code> or ask us to delete it. Audit log entries are kept for security and troubleshooting; those that contain your user ID are deleted when you opt out.</p>
 
 <h2>6. Your choices</h2>
 <ul>
 <li><b>Revoke access:</b> in Discord, go to User Settings → Authorized Apps and remove AutoAuth. The stored tokens then stop working.</li>
-<li><b>Delete your data:</b> ask in our <a href="${LINKS.discord}" target="_blank" rel="noopener">Discord server</a> and we will delete your stored record. Removing your record does not remove you from servers you already joined; leave those from Discord.</li>
+<li><b>Opt out and delete your data:</b> run <code>/optout</code> in Discord. It revokes your authorization with Discord and deletes your stored record and the audit log entries that contain your user ID. You can also ask in our <a href="${LINKS.discord}" target="_blank" rel="noopener">Discord server</a>. Deleting your record does not remove you from servers you already joined; leave those from Discord.</li>
 </ul>
 
 <h2>7. Security</h2>

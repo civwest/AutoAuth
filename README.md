@@ -30,3 +30,6 @@ The PostgreSQL schema is created automatically. Dashboard sessions are stored in
 `site.js` serves `/` (bot status), `/info`, `/tos` and `/privacy-policy`; `/home` redirects to `/`. The dashboard and `/login` are unchanged.
 
 Images: save the background as `public/bg.webp` and the logo/favicon as `public/icon.webp`. They are served at `/assets/bg.webp` and `/assets/icon.webp`. If those files are missing, the site falls back to the original Discord CDN links, which expire.
+
+## Commands
+`/auth`, `/optout` (user deletes own saved data and revokes the grant), `/addusers` and `/adduser` (admins).
