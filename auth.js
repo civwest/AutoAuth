@@ -137,7 +137,10 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
     if (body.agree !== "yes") return res.redirect(303, `/auth?error=agree&mode=${mode}`);
     if (!checkCaptcha(body.token, body.answer)) return res.redirect(303, `/auth?error=captcha&mode=${mode}`);
     await log("auth_flow_started", { mode });
-    return res.set("Cache-Control", "no-store").redirect(303, discordUrl(mode));
+    const url = discordUrl(mode);
+    // Backup copy of the state: some Discord install flows return without it.
+    res.cookie("aa_state", new URL(url).searchParams.get("state"), { httpOnly: true, secure: true, sameSite: "lax", maxAge: 60 * 60 * 1000, path: "/oauth" });
+    return res.set("Cache-Control", "no-store").redirect(303, url);
   });
 
   // Old direct link now just leads to the page.
@@ -146,14 +149,17 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
   const retry = "<p><a class='cta' href='/auth'>Back to Authorization</a></p>";
   app.get("/oauth/callback", async (req, res) => {
     res.set({ "Referrer-Policy": "no-referrer", "Cache-Control": "no-store" });
-    const { code, state, error } = req.query;
-    const mode = typeof state === "string" ? consumeState(state) : null;
+    const { code, error } = req.query;
+    const cookieState = String(req.headers.cookie || "").split(/;\s*/).map((c) => c.split("=")).find((c) => c[0] === "aa_state");
+    const state = typeof req.query.state === "string" ? req.query.state : (cookieState ? decodeURIComponent(cookieState[1] || "") : "");
+    const mode = state && typeof code === "string" && code ? consumeState(state) : null;
+    res.clearCookie("aa_state", { path: "/oauth" });
     if (error) {
       await log("oauth_denied", { error: String(error) });
       return res.status(400).send(site.page("Authorization cancelled", `<h1>Authorization cancelled</h1><p>You did not approve AutoAuth, so nothing was saved.</p>${retry}`, "auth"));
     }
     if (!mode || typeof code !== "string" || !code) {
-      await log("oauth_invalid_state");
+      await log("oauth_invalid_state", { has_code: !!code, has_state: typeof req.query.state === "string", has_cookie: !!cookieState, keys: Object.keys(req.query).join(",").slice(0, 100) });
       return res.status(400).send(site.page("Start from the website", `<h1>Please start from the website</h1><p>For security, authorization has to be started from the <a href="/auth">Authorization page</a>, where you read the details and complete a quick check. This link is invalid, expired, or was already used.</p>${retry}`, "auth"));
     }
     try {

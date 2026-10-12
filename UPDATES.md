@@ -47,3 +47,9 @@ Run automatically at startup (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`): `serv
 - The built-in captcha is basic; Turnstile or hCaptcha can be added.
 - Retry uses `client.destroy()` then `login()`, so test it live.
 - Chrome Safe Browsing review must be requested through Search Console; a custom domain is the durable fix.
+
+## Later fixes
+- Startup check: on boot, every stored authorization is verified (tokens refreshed); revoked ones lose the server flag.
+- OAuth callback accepts the state from a backup cookie if Discord drops it, and logs which parameters arrived (`oauth_invalid_state` in Logs).
+- Bot login has a timeout, logs each step, and retries every 60 seconds.
+- Site address follows `REDIRECT_URI` (now `https://autoauth.cfd`).

@@ -26,7 +26,7 @@ function mk(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=c
 function pickServer(o){
  $('ps-title').textContent=o.title;$('ps-desc').textContent=o.desc;
  var list=$('ps-list');list.innerHTML='';
- if(!AA.servers.length)list.textContent='The bot is not in any servers.';
+ if(!AA.connected)list.textContent='The bot is not connected to Discord right now, so servers cannot be listed. Use Retry on the Bot Control page and check the Render logs.';else if(!AA.servers.length)list.textContent='The bot is not in any servers.';
  AA.servers.forEach(function(g){
   var row=mk('div','dlg-row'),info=mk('div');info.appendChild(mk('b','',g.name));
   info.appendChild(mk('div','muted',g.id+' · '+(g.members||'—')+' members')).style.fontSize='12px';
@@ -127,9 +127,9 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
   function getGuild(req, res) {
     const id = String(req.params.id || req.params.gid || "");
     if (!/^\d{17,20}$/.test(id)) { res.status(400).send("Invalid server ID."); return null; }
-    if (!client.isReady()) { res.status(503).send("Discord bot is disconnected."); return null; }
+    if (!client.isReady()) { flash(req, "The bot is disconnected from Discord. Use Retry on Bot Control."); res.redirect(303, back(req, "/dashboard")); return null; }
     const g = client.guilds.cache.get(id);
-    if (!g) { res.status(404).send("That server was not found in the bot's current server list."); return null; }
+    if (!g) { flash(req, "That server was not found in the bot's current server list."); res.redirect(303, back(req, "/dashboard")); return null; }
     return g;
   }
   const validUid = (s) => /^\d{17,20}$/.test(String(s || ""));
@@ -137,7 +137,7 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
 
   // Popups shared by Bot Control and Database. `users` feeds the pickers.
   function popups(users) {
-    const data = JSON.stringify({ servers: guildData(), users }).replace(/</g, "\\u003c");
+    const data = JSON.stringify({ servers: guildData(), users, connected: client.isReady() }).replace(/</g, "\\u003c");
     const x = '<button type="button" class="secondary" onclick="closeAll()">Close</button>';
     return `<script type="application/json" id="aa-data">${data}</script>
   <dialog id="dlg-pickserver"><div class="dlg-top"><h2 id="ps-title" style="margin:0"></h2>${x}</div><p class="muted" id="ps-desc"></p><div class="dlg-list" id="ps-list"></div></dialog>

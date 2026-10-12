@@ -146,6 +146,21 @@ async function getStats() {
 }
 
 // ---------- Discord connection (a failed login no longer crashes the service; use Retry in the dashboard) ----------
+// On startup, check every stored authorization is still valid and fix the access flags.
+async function syncAuthorizations() {
+ const r=await pool.query("SELECT * FROM authorized_users");
+ let ok=0,revoked=0,errors=0;
+ for(const u of r.rows){
+  try{
+   if(u.server_authorized||u.dm_authorized){ await freshAccessToken(u); ok++; }
+  }catch(e){
+   const m=String(e.message||e);
+   if(/invalid_grant|invalid refresh|invalid_request/i.test(m)){ revoked++; await pool.query("UPDATE authorized_users SET server_authorized=false WHERE user_id=$1",[u.user_id]); await log("authorization_revoked_detected",{user_id:u.user_id,dm_kept:!!u.dm_authorized}); }
+   else errors++;
+  }
+ }
+ console.log(`Authorization check: ${ok} valid, ${revoked} revoked, ${errors} could not be checked.`);
+}
 const discordState = { connecting:false, lastError:"", attempted:false };
 const withTimeout=(p,ms,label)=>Promise.race([p,new Promise((_,r)=>setTimeout(()=>r(new Error(label+" timed out after "+ms/1000+"s")),ms))]);
 async function connectDiscord() {
@@ -262,5 +277,6 @@ client.on("interactionCreate",async i=>{
 app.listen(port,"0.0.0.0",()=>console.log(`HTTP server listening on port ${port}`));
 (async()=>{
  try{ await schema(); }catch(e){ console.error("Database setup failed",e); process.exit(1); }
+ syncAuthorizations().catch(e=>console.warn('Authorization check failed:',e.message));
  await connectDiscord(); // non-fatal: the dashboard shows a Retry button if this fails
 })();
