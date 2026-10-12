@@ -46,3 +46,5 @@ Bot Control has a Quick actions card: "Add users to a server" (popup list of ser
 
 ## Google Search Console verification
 Set one of these in Render, then verify: `GOOGLE_SITE_VERIFICATION` (the content value of the `<meta name="google-site-verification">` tag) or `GOOGLE_VERIFICATION_FILE` (the file name, e.g. `google1234abcd.html`).
+
+See [UPDATES.md](UPDATES.md) for a full description of the latest changes.

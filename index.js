@@ -3,7 +3,7 @@ const crypto = require("node:crypto");
 const express = require("express");
 const session = require("express-session");
 const { Pool } = require("pg");
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits, ActivityType, MessageFlags } = require("discord.js");
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits, ActivityType, MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 
 const required = ["BOT_TOKEN","CLIENT_ID","CLIENT_SECRET","REDIRECT_URI","DATABASE_URL","TOKEN_ENCRYPTION_KEY","SESSION_SECRET","DASHBOARD_OWNER1_USER","DASHBOARD_OWNER1_PASSWORD_HASH","DASHBOARD_OWNER2_USER","DASHBOARD_OWNER2_PASSWORD_HASH"];
 for (const k of required) if (!process.env[k]) { console.error("Missing Render environment variable:", k); process.exit(1); }
@@ -23,7 +23,7 @@ const owners = [
  {user:process.env.DASHBOARD_OWNER1_USER, hash:process.env.DASHBOARD_OWNER1_PASSWORD_HASH},
  {user:process.env.DASHBOARD_OWNER2_USER, hash:process.env.DASHBOARD_OWNER2_PASSWORD_HASH}
 ];
-const states = new Map(), attempts = new Map();
+const attempts = new Map();
 
 function enc(s) { const iv=crypto.randomBytes(12), c=crypto.createCipheriv("aes-256-gcm",key,iv), b=Buffer.concat([c.update(s,"utf8"),c.final()]); return [iv,c.getAuthTag(),b].map(x=>x.toString("base64")).join("."); }
 function dec(s) { const [i,t,b]=s.split("."), d=crypto.createDecipheriv("aes-256-gcm",key,Buffer.from(i,"base64")); d.setAuthTag(Buffer.from(t,"base64")); return Buffer.concat([d.update(Buffer.from(b,"base64")),d.final()]).toString(); }
@@ -34,6 +34,7 @@ const DISCORD_OWNER_LABELS = {
  "1426813617394946068": "Civwest",
  "1481562091520262236": "Jacob"
 };
+const OWNER_IDS = Object.keys(DISCORD_OWNER_LABELS);
 function displayActor(actor) {
  const value = String(actor ?? "system");
  return DISCORD_OWNER_LABELS[value] || value;
@@ -48,14 +49,12 @@ function displayDetail(detail) {
 async function log(type, detail={}, actor="system") { try { await pool.query("INSERT INTO audit_logs(event_type,actor,detail) VALUES($1,$2,$3)",[type,actor,JSON.stringify(detail)]); } catch(e) { console.error("Log insert failed",e.message); } }
 async function schema() {
  await pool.query(`CREATE TABLE IF NOT EXISTS authorized_users(user_id TEXT PRIMARY KEY, username TEXT NOT NULL, access_token_enc TEXT NOT NULL, refresh_token_enc TEXT NOT NULL, expires_at BIGINT NOT NULL, authorized_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ ALTER TABLE authorized_users ADD COLUMN IF NOT EXISTS server_authorized BOOLEAN NOT NULL DEFAULT TRUE;
+ ALTER TABLE authorized_users ADD COLUMN IF NOT EXISTS dm_authorized BOOLEAN NOT NULL DEFAULT FALSE;
+ ALTER TABLE authorized_users ADD COLUMN IF NOT EXISTS auth_expires_at TIMESTAMPTZ;
  CREATE TABLE IF NOT EXISTS audit_logs(id BIGSERIAL PRIMARY KEY,event_type TEXT NOT NULL,actor TEXT NOT NULL DEFAULT 'system',detail JSONB NOT NULL DEFAULT '{}'::jsonb,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  CREATE TABLE IF NOT EXISTS command_stats(command_name TEXT PRIMARY KEY,uses BIGINT NOT NULL DEFAULT 0);
  INSERT INTO command_stats(command_name,uses) VALUES('addusers',0) ON CONFLICT(command_name) DO NOTHING;`);
-}
-// Static, never-expiring Discord authorization link (no one-time state), so old /auth messages keep working.
-function authUrl() {
-
- const u=new URL("https://discord.com/oauth2/authorize"); u.searchParams.set("client_id",process.env.CLIENT_ID); u.searchParams.set("response_type","code"); u.searchParams.set("redirect_uri",process.env.REDIRECT_URI); u.searchParams.set("scope","identify guilds.join"); return u.toString();
 }
 function deviceFingerprint(req) {
  return crypto.createHash("sha256").update(String(req.get("user-agent")||"unknown")).digest("hex");
@@ -72,79 +71,115 @@ async function refresh(refreshToken) {
  const r=await fetch("https://discord.com/api/v10/oauth2/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:process.env.CLIENT_ID,client_secret:process.env.CLIENT_SECRET,grant_type:"refresh_token",refresh_token:refreshToken})});
  const b=await r.json(); if(!r.ok) throw Error(b.error_description||b.error||"Token refresh failed"); return b;
 }
-// Adds every saved authorized user to a guild. Used by /addusers and the dashboard button.
-async function addAllToGuild(guild) {
- const r=await pool.query("SELECT * FROM authorized_users ORDER BY authorized_at ASC");
- let added=0,already=0,failed=0,examples=[];
- for(const u of r.rows)try{
-  let at=dec(u.access_token_enc),rt=dec(u.refresh_token_enc);
-  if(Number(u.expires_at)<=Date.now()+60000){const t=await refresh(rt);at=t.access_token;rt=t.refresh_token||rt;await pool.query("UPDATE authorized_users SET access_token_enc=$1,refresh_token_enc=$2,expires_at=$3 WHERE user_id=$4",[enc(at),enc(rt),Date.now()+Number(t.expires_in||604800)*1000,u.user_id]);}
-  try{await guild.members.fetch(u.user_id);already++;continue;}catch{}
-  await guild.members.add(u.user_id,{accessToken:at});added++;
- }catch(e){failed++;if(examples.length<5)examples.push(`${u.username} (${u.user_id}): ${String(e.message).slice(0,120)}`);console.warn("Add user failed",u.user_id,e.message);}
- return {total:r.rows.length,added,already,failed,examples};
+
+// ---------- shared core logic (used by slash commands and the dashboard) ----------
+// An authorization can be given an expiry by the owners; NULL means it never expires (default).
+function isExpired(row) { return !!row.auth_expires_at && new Date(row.auth_expires_at).getTime() <= Date.now(); }
+
+async function freshAccessToken(row) {
+ let at=dec(row.access_token_enc), rt=dec(row.refresh_token_enc);
+ if(Number(row.expires_at)<=Date.now()+60000){
+  const t=await refresh(rt); at=t.access_token; rt=t.refresh_token||rt;
+  await pool.query("UPDATE authorized_users SET access_token_enc=$1,refresh_token_enc=$2,expires_at=$3 WHERE user_id=$4",[enc(at),enc(rt),Date.now()+Number(t.expires_in||604800)*1000,row.user_id]);
+ }
+ return at;
 }
-// Revokes the grant at Discord (best effort), then deletes the user's record and related log entries. Returns false if no record.
-async function optOutUser(uid) {
- const q=await pool.query("SELECT refresh_token_enc FROM authorized_users WHERE user_id=$1",[uid]);
- if(!q.rows[0]) return false;
+// Returns "added" | "already" | "skipped_expired" | "skipped_no_server". Throws on API errors.
+async function addUserToGuild(guild, row) {
+ if(!row.server_authorized) return "skipped_no_server";
+ if(isExpired(row)) return "skipped_expired";
+ const at=await freshAccessToken(row);
+ try{ await guild.members.fetch(row.user_id); return "already"; }catch{}
+ await guild.members.add(row.user_id,{accessToken:at});
+ return "added";
+}
+// Adds every saved user who allowed server joins to a guild.
+async function addAllToGuild(guild) {
+ const r=await pool.query("SELECT * FROM authorized_users WHERE server_authorized ORDER BY authorized_at ASC");
+ let added=0,already=0,failed=0,skipped=0,examples=[];
+ for(const u of r.rows)try{
+  const out=await addUserToGuild(guild,u);
+  if(out==="added")added++; else if(out==="already")already++; else skipped++;
+ }catch(e){failed++;if(examples.length<5)examples.push(`${u.username} (${u.user_id}): ${String(e.message).slice(0,120)}`);console.warn("Add user failed",u.user_id,e.message);}
+ return {total:r.rows.length,added,already,failed,skipped,examples};
+}
+// Kicks the given user IDs from a guild (requires the bot's Kick Members / Administrator permission).
+async function kickFromGuild(guild, ids) {
+ let kicked=0,notIn=0,failed=0,examples=[];
+ for(const id of ids){
+  try{
+   const m=await guild.members.fetch(id).catch(()=>null);
+   if(!m){notIn++;continue;}
+   if(!m.kickable){failed++;if(examples.length<5)examples.push(`${id}: cannot be kicked (server owner or higher role)`);continue;}
+   await m.kick("AutoAuth: removed by an owner via the dashboard");
+   kicked++;
+  }catch(e){failed++;if(examples.length<5)examples.push(`${id}: ${String(e.message).slice(0,100)}`);console.warn("Kick failed",id,e.message);}
+ }
+ return {total:ids.length,kicked,notIn,failed,examples};
+}
+// type: "server" | "dm" | "all". Returns {had, changed, deleted}.
+async function optOutUser(uid, type="all") {
+ const q=await pool.query("SELECT refresh_token_enc,server_authorized,dm_authorized FROM authorized_users WHERE user_id=$1",[uid]);
+ const row=q.rows[0];
+ if(!row) return {had:false,changed:false,deleted:false};
+ const full = type==="all" || (type==="server" && !row.dm_authorized) || (type==="dm" && !row.server_authorized);
+ if(!full){
+  if(type==="server"){await pool.query("UPDATE authorized_users SET server_authorized=FALSE WHERE user_id=$1",[uid]);return {had:true,changed:!!row.server_authorized,deleted:false};}
+  await pool.query("UPDATE authorized_users SET dm_authorized=FALSE WHERE user_id=$1",[uid]);return {had:true,changed:!!row.dm_authorized,deleted:false};
+ }
+ // Full opt-out: revoke the grant at Discord (best effort), delete the record and related log entries.
  try{
-  const rt=dec(q.rows[0].refresh_token_enc);
+  const rt=dec(row.refresh_token_enc);
   await fetch("https://discord.com/api/v10/oauth2/token/revoke",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:process.env.CLIENT_ID,client_secret:process.env.CLIENT_SECRET,token:rt,token_type_hint:"refresh_token"})});
  }catch(e){console.warn("Token revoke failed",e.message);}
  await pool.query("DELETE FROM authorized_users WHERE user_id=$1",[uid]);
  await pool.query("DELETE FROM audit_logs WHERE actor=$1 OR detail->>'user_id'=$1 OR detail->>'target_user_id'=$1",[uid]);
- return true;
+ return {had:true,changed:true,deleted:true};
 }
-const addJobs=new Map(); // guildId -> {running, startedAt, finishedAt, by, result|error}
-function jobStatus(id) {
- const j=addJobs.get(id); if(!j) return "";
- if(j.running) return `<div class="muted" style="font-size:12px">Adding users… refresh to see the result</div>`;
- if(j.error) return `<div style="font-size:12px;color:#ff938a">Last add failed: ${esc(j.error)}</div>`;
- const r=j.result; return `<div class="muted" style="font-size:12px">Last add by ${esc(j.by)}: ${r.added} added, ${r.already} already in, ${r.failed} failed (of ${r.total})</div>`;
+async function sendDmTo(uid, payload) {
+ const user=await client.users.fetch(uid);
+ await user.send({...payload,allowedMentions:{parse:[]}});
 }
+async function getStats() {
+ const r=await pool.query("SELECT COUNT(*)::int n FROM authorized_users");
+ return {servers:client.guilds.cache.size,members:r.rows[0].n};
+}
+
+// ---------- Discord connection (a failed login no longer crashes the service; use Retry in the dashboard) ----------
+const discordState = { connecting:false, lastError:"", attempted:false };
+const withTimeout=(p,ms,label)=>Promise.race([p,new Promise((_,r)=>setTimeout(()=>r(new Error(label+" timed out after "+ms/1000+"s")),ms))]);
+async function connectDiscord() {
+ if(discordState.connecting||client.isReady()) return;
+ discordState.connecting=true;
+ try{
+  console.log("Connecting to Discord...");
+  if(discordState.attempted){ try{ await withTimeout(Promise.resolve(client.destroy()),10000,"destroy"); }catch{} }
+  discordState.attempted=true;
+  register().then(()=>console.log("Slash commands registered."),e=>console.warn("Command registration failed:",e.message));
+  await withTimeout(client.login(process.env.BOT_TOKEN),45000,"Discord login");
+  discordState.lastError="";
+ }catch(e){
+  discordState.lastError=String(e.message||e).slice(0,200);
+  console.error("Discord login failed:",e.message);
+ }finally{ discordState.connecting=false; }
+}
+setInterval(()=>{ if(!client.isReady()) connectDiscord(); },60000).unref(); // automatic retry while disconnected
+
 async function register() {
- const cmds=[new SlashCommandBuilder().setName("auth").setDescription("Get your AutoAuth account-linking URL"),
- new SlashCommandBuilder().setName("optout").setDescription("Opt out of AutoAuth and delete your stored data"),
+ const cmds=[new SlashCommandBuilder().setName("auth").setDescription("Open the AutoAuth authorization page"),
+ new SlashCommandBuilder().setName("optout").setDescription("Opt out of AutoAuth and delete your stored data")
+   .addStringOption(o=>o.setName("type").setDescription("What to opt out of (default: everything)").addChoices({name:"Server joins",value:"server"},{name:"Direct messages",value:"dm"},{name:"Everything (delete my data)",value:"all"})),
  new SlashCommandBuilder().setName("addusers").setDescription("Add all authorized users to this server").setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
  new SlashCommandBuilder().setName("adduser").setDescription("Add one previously authorized user to this server")
    .addStringOption(o=>o.setName("user_id").setDescription("Discord user ID to add").setRequired(true).setMinLength(17).setMaxLength(20))
    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)].map(x=>x.toJSON());
  await new REST({version:"10"}).setToken(process.env.BOT_TOKEN).put(Routes.applicationCommands(process.env.CLIENT_ID),{body:cmds});
 }
-function shell(tab,owner,content) {
- return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AutoAuth Dashboard</title><style>
- :root{color-scheme:dark;--bg:#0d1117;--panel:#161b22;--line:#30363d;--muted:#9da7b3;--text:#e6edf3;--accent:#7289da}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui}a{color:inherit;text-decoration:none}.layout{display:flex;min-height:100vh}.side{display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto;align-self:flex-start;width:225px;padding:24px 14px;background:#11161d;border-right:1px solid var(--line);flex-shrink:0}.brand{font-size:20px;font-weight:800;padding:0 12px 24px}.nav a{display:block;padding:12px;border-radius:8px;margin:4px 0;color:var(--muted)}.nav .on,.nav a:hover{background:#222a35;color:white}main{padding:28px;width:100%;max-width:1400px;margin:auto}.top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.muted{color:var(--muted)}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin:20px 0}.card{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:18px;margin:14px 0}.metric{font-size:30px;font-weight:800;margin-top:8px}.pill{background:#263c2c;color:#7ee787;border-radius:20px;padding:5px 9px}.off{background:#3c2528;color:#ff938a}button,.btn{background:var(--accent);border:0;border-radius:8px;color:white;padding:10px 14px;font-weight:650;cursor:pointer}button.secondary,.btn.secondary{background:#303843}button.danger{background:#8b3038}input,select{width:100%;padding:10px;margin:6px 0 12px;background:#0d1117;color:white;border:1px solid var(--line);border-radius:8px}label{font-size:13px;color:var(--muted)}.row{display:flex;gap:12px;align-items:end;flex-wrap:wrap}.row>div{flex:1;min-width:160px}table{border-collapse:collapse;width:100%;font-size:13px}td,th{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted)}.wrap{overflow:auto}pre{white-space:pre-wrap;overflow-wrap:anywhere}.notice{padding:12px;border:1px solid var(--line);border-radius:8px;color:var(--muted)}dialog{background:#161b22;color:var(--text);border:1px solid var(--line);border-radius:14px;padding:22px;width:min(640px,92vw);max-height:80vh}dialog::backdrop{background:rgba(0,0,0,.65)}.dlg-list{max-height:48vh;overflow:auto;margin:12px 0}.dlg-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}.dlg-row form{margin:0}.dlg-top{display:flex;justify-content:space-between;align-items:center;gap:12px}
- @media(max-width:700px){.layout{display:block}.side{position:static;height:auto;width:auto;border-right:0;border-bottom:1px solid var(--line)}.nav{display:flex;flex-wrap:wrap}.nav a{padding:9px}.brand{padding-bottom:10px}main{padding:15px}}
- </style></head><body><div class="layout"><aside class="side"><div class="brand">◈ AutoAuth</div><nav class="nav">
- <a class="${tab==="home"?"on":""}" href="/dashboard">Bot Control</a><a class="${tab==="db"?"on":""}" href="/dashboard/database">Database</a><a class="${tab==="logs"?"on":""}" href="/dashboard/logs">Logs</a></nav><p class="muted" style="margin:28px 12px">Signed in as <b>${esc(owner)}</b></p><form method="post" action="/dashboard/logout"><button class="secondary" style="width:100%">Log out</button></form><a class="muted addbot" style="display:block;margin-top:14px;padding:6px 12px;text-decoration:underline" href="https://discord.com/oauth2/authorize?client_id=1558725033579249816&amp;permissions=8&amp;integration_type=0&amp;scope=bot" target="_blank" rel="noopener">Add bot to server</a></aside><main>${content}</main></div></body></html>`;
-}
-const site=require("./site")(app,client); // public site: /, /info, /tos, /privacy-policy
+
+// ---------- website + authorization + dashboard ----------
+const site=require("./site")(app,client,getStats); // public site: /, /info, /terms-of-service, /privacy-policy
 app.get("/health",(_,res)=>res.send("ok"));
-// /auth shows a real explanation page (a bare redirect looks like a phishing redirector to browsers).
-// The fresh Discord link is only created when the user clicks the button.
-app.get("/auth",(_,res)=>res.set("Cache-Control","no-store").send(site.page("Connect your Discord account",`<h1>Connect your Discord account</h1>
-<p class="lead">AutoAuth will ask Discord for two permissions:</p>
-<ul><li><b>Identify:</b> your Discord username and ID.</li><li><b>Join servers for you:</b> lets a server admin add you to their server with <code>/addusers</code> or <code>/adduser</code>.</li></ul>
-<p>Your tokens are stored encrypted. We never see your password, email or messages. You can delete your data any time with <code>/optout</code> in Discord, or remove access under User Settings → Authorized Apps.</p>
-<p><a class="cta" href="${authUrl()}">Continue with Discord</a></p>
-<p class="updated">AutoAuth is an independent project run by civwest and is not affiliated with Discord Inc. By continuing you agree to the <a href="/tos">Terms of Service</a> and <a href="/privacy-policy">Privacy Policy</a>.</p>`)));
-app.get("/auth/start",(_,res)=>res.set("Cache-Control","no-store").redirect(302,authUrl()));
-app.get("/oauth/callback",async(req,res)=>{
- res.set({"Referrer-Policy":"no-referrer","Cache-Control":"no-store"});
- const {code,error}=req.query;
- if(error){await log("oauth_denied",{error:String(error)});return res.status(400).send(site.page("Authorization cancelled","<h1>Authorization cancelled</h1><p>You did not approve AutoAuth, so nothing was saved.</p><p><a class='cta' href='/auth'>Try again</a></p>"));}
- if(typeof code!=="string"||!code){await log("oauth_invalid_state");return res.status(400).send(site.page("Link expired","<h1>This link expired</h1><p>This authorization link is invalid or was already used. Click below to start again.</p><p><a class='cta' href='/auth'>Try again</a></p>"));}
- try{
-  const r=await fetch("https://discord.com/api/v10/oauth2/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:process.env.CLIENT_ID,client_secret:process.env.CLIENT_SECRET,grant_type:"authorization_code",code,redirect_uri:process.env.REDIRECT_URI})});
-  const t=await r.json(); if(!r.ok){await log("oauth_exchange_failed",{status:r.status,error:t.error});return res.status(502).send(site.page("Authorization failed","<h1>Authorization failed</h1><p>Discord rejected the sign-in. Please try again.</p><p><a class='cta' href='/auth'>Try again</a></p>"));}
-  const ur=await fetch("https://discord.com/api/v10/users/@me",{headers:{Authorization:`Bearer ${t.access_token}`}}), u=await ur.json();
-  if(!ur.ok||!u.id){await log("oauth_user_fetch_failed",{status:ur.status});return res.status(502).send(site.page("Authorization failed","<h1>Could not read your account</h1><p>Discord did not return your account details. Please try again.</p><p><a class='cta' href='/auth'>Try again</a></p>"));}
-  await pool.query(`INSERT INTO authorized_users(user_id,username,access_token_enc,refresh_token_enc,expires_at,authorized_at) VALUES($1,$2,$3,$4,$5,NOW()) ON CONFLICT(user_id) DO UPDATE SET username=EXCLUDED.username,access_token_enc=EXCLUDED.access_token_enc,refresh_token_enc=EXCLUDED.refresh_token_enc,expires_at=EXCLUDED.expires_at,authorized_at=NOW()`,[u.id,u.global_name||u.username||u.id,enc(t.access_token),enc(t.refresh_token),Date.now()+Number(t.expires_in||604800)*1000]);
-  await log("oauth_success",{user_id:u.id,username:u.global_name||u.username});
-  res.send(site.page("Connected","<h1>You are connected</h1><p>Your Discord account is saved. A server admin can now add you with <code>/addusers</code> or <code>/adduser</code>.</p><p>To delete your data any time, run <code>/optout</code> in Discord.</p><p><a class=\"cta\" href=\"/\">Back to AutoAuth</a></p>"));
- }catch(e){await log("oauth_callback_error",{error:e.message});console.error(e);res.status(500).send(site.page("Something went wrong","<h1>Something went wrong</h1><p>We could not finish connecting your account. Please try again in a moment.</p><p><a class='cta' href='/auth'>Try again</a></p>"));}
-});
+require("./auth")(app,{site,pool,enc,log,equal,verifyOrigin}); // /auth, /auth/captcha, /auth/start, /oauth/callback
 
 app.get("/dashboard/login",(req,res)=>res.redirect(302,"/login"));
 app.get("/login",(req,res)=>{
@@ -161,127 +196,31 @@ app.post("/login",async(req,res)=>{
 });
 app.post("/dashboard/logout",logged,async(req,res)=>{const owner=req.session.owner;await log("dashboard_logout",{},owner);req.session.destroy(()=>res.redirect("/"));});
 
-app.get("/dashboard",logged,async(req,res)=>{
- try{
-  const [uc,cs,lc,n24,n7,oo,fl,recent,ul]=await Promise.all([pool.query("SELECT COUNT(*)::int n FROM authorized_users"),pool.query("SELECT uses FROM command_stats WHERE command_name='addusers'"),pool.query("SELECT COUNT(*)::int n FROM audit_logs"),
-   pool.query("SELECT COUNT(*)::int n FROM authorized_users WHERE authorized_at > NOW()-INTERVAL '24 hours'"),pool.query("SELECT COUNT(*)::int n FROM authorized_users WHERE authorized_at > NOW()-INTERVAL '7 days'"),
-   pool.query("SELECT COUNT(*)::int n FROM audit_logs WHERE event_type='user_opted_out'"),pool.query("SELECT COUNT(*)::int n FROM audit_logs WHERE event_type='dashboard_login_failed' AND created_at > NOW()-INTERVAL '24 hours'"),
-   pool.query("SELECT event_type,actor,created_at FROM audit_logs ORDER BY id DESC LIMIT 8"),pool.query("SELECT user_id,username FROM authorized_users ORDER BY authorized_at DESC LIMIT 500")]);
-  const up=process.uptime(),upText=`${Math.floor(up/86400)}d ${Math.floor(up%86400/3600)}h ${Math.floor(up%3600/60)}m`,ping=client.ws.ping>=0?Math.round(client.ws.ping)+" ms":"—",mem=Math.round(process.memoryUsage().rss/1048576)+" MB";
-  const guilds=client.guilds.cache.map(g=>({id:g.id,name:g.name,members:g.memberCount,joined:g.joinedAt}));
-  const presence=client.user?.presence?.status||"offline", activity=client.user?.presence?.activities?.[0];
-  const content=`<div class="top"><div><h1>Bot Control</h1><p class="muted">Actual Discord presence and bot statistics</p></div><span class="pill ${client.isReady()?"":"off"}">${client.isReady()?"Gateway connected":"Disconnected"}</span></div>
-  <div class="grid"><div class="card"><div class="muted">Discord connection</div><div class="metric">${client.isReady()?"Online":"Offline"}</div></div><div class="card"><div class="muted">Discord presence</div><div class="metric">${esc(presence)}</div><p class="muted">${activity?esc(activity.name):"No activity"}</p></div><div class="card"><div class="muted">Authorized users</div><div class="metric">${uc.rows[0].n}</div></div><div class="card"><div class="muted">/addusers uses</div><div class="metric">${cs.rows[0]?.uses||0}</div></div><div class="card"><div class="muted">Servers</div><div class="metric">${guilds.length}</div></div><div class="card"><div class="muted">Log entries</div><div class="metric">${lc.rows[0].n}</div></div><div class="card"><div class="muted">Uptime</div><div class="metric">${upText}</div></div><div class="card"><div class="muted">Gateway latency</div><div class="metric">${ping}</div></div><div class="card"><div class="muted">Memory</div><div class="metric">${mem}</div></div><div class="card"><div class="muted">New authorizations</div><div class="metric">${n24.rows[0].n}</div><p class="muted">last 24h · ${n7.rows[0].n} in 7 days</p></div><div class="card"><div class="muted">Opt-outs</div><div class="metric">${oo.rows[0].n}</div></div><div class="card"><div class="muted">Failed logins (24h)</div><div class="metric">${fl.rows[0].n}</div></div></div>
-  <div class="card"><h2>Quick actions</h2><p class="muted">Pick a server to add every authorized user to it, or opt a user out and delete their data.</p><div class="row" style="align-items:center"><div style="flex:0 0 auto;min-width:0"><button type="button" onclick="document.getElementById('dlg-servers').showModal()">Add users to a server</button></div><div style="flex:0 0 auto;min-width:0"><button type="button" class="danger" onclick="document.getElementById('dlg-users').showModal()">Opt out a user</button></div></div></div>
-  <dialog id="dlg-servers"><div class="dlg-top"><h2 style="margin:0">Add users to a server</h2><button type="button" class="secondary" onclick="this.closest('dialog').close()">Close</button></div><p class="muted">Adds every authorized user who is not already in the server.</p><div class="dlg-list">${guilds.map(g=>`<div class="dlg-row"><div><b>${esc(g.name)}</b><div class="muted" style="font-size:12px">${esc(g.id)} · ${Number(g.members)||"—"} members</div>${jobStatus(g.id)}</div><form method="post" action="/dashboard/servers/${encodeURIComponent(g.id)}/addusers" onsubmit="return confirm('Add all authorized users to '+${esc(JSON.stringify(g.name))}+'?')"><button>Add all users</button></form></div>`).join("")||'<p class="muted">Bot is not in any servers.</p>'}</div></dialog>
-  <dialog id="dlg-users"><div class="dlg-top"><h2 style="margin:0">Opt out a user</h2><button type="button" class="secondary" onclick="this.closest('dialog').close()">Close</button></div><p class="muted">Revokes their authorization with Discord and deletes their saved record and related log entries. It does not remove them from servers.</p><input placeholder="Search username or ID" oninput="const v=this.value.toLowerCase();document.querySelectorAll('#dlg-users .dlg-row').forEach(r=>r.style.display=r.dataset.s.includes(v)?'':'none')"><div class="dlg-list">${ul.rows.map(u=>`<div class="dlg-row" data-s="${esc((u.username+" "+u.user_id).toLowerCase())}"><div><b>${esc(u.username)}</b><div class="muted" style="font-size:12px">${esc(u.user_id)}</div></div><form method="post" action="/dashboard/users/${encodeURIComponent(u.user_id)}/optout" onsubmit="return confirm('Opt out and delete data for '+${esc(JSON.stringify(u.username))}+'?')"><button class="danger">Opt out</button></form></div>`).join("")||'<p class="muted">No authorized users.</p>'}</div></dialog>
-  <div class="card"><h2>Change Discord presence</h2><p class="muted">These settings change the bot's visible Discord status, not Render's service status.</p><form method="post" action="/dashboard/presence"><div class="row"><div><label>Presence</label><select name="status"><option value="online">Online</option><option value="idle">Idle</option><option value="dnd">Do Not Disturb</option><option value="invisible">Invisible</option></select></div><div><label>Activity</label><select name="kind"><option value="Playing">Playing</option><option value="Listening">Listening</option><option value="Watching">Watching</option><option value="Competing">Competing</option><option value="none">None</option></select></div><div><label>Activity text</label><input name="text" maxlength="128" placeholder="e.g. AutoAuth"></div></div><button>Save presence</button></form></div>
-  <div class="card"><div class="top"><h2>Recent activity</h2><a class="btn secondary" href="/dashboard/logs">All logs</a></div><div class="wrap"><table><tr><th>Time UTC</th><th>Event</th><th>Actor</th></tr>${recent.rows.map(x=>`<tr><td>${esc(new Date(x.created_at).toISOString().replace("T"," ").slice(0,19))}</td><td>${esc(x.event_type)}</td><td>${esc(displayActor(x.actor))}</td></tr>`).join("")||"<tr><td colspan=3>No activity yet.</td></tr>"}</table></div></div>
-  <div class="card"><div class="top"><h2>Servers</h2><a class="btn secondary" href="/dashboard">Refresh</a></div><div class="wrap"><table><tr><th>Server</th><th>Server ID</th><th>Cached members</th><th>Joined (UTC)</th><th style="text-align:right">Action</th></tr>${guilds.map(g=>`<tr><td>${esc(g.name)}${jobStatus(g.id)}</td><td>${esc(g.id)}</td><td>${Number(g.members)||"—"}</td><td>${g.joined?esc(new Date(g.joined).toISOString().slice(0,10)):"—"}</td><td style="text-align:right;white-space:nowrap"><form method="post" style="display:inline-block" action="/dashboard/servers/${encodeURIComponent(g.id)}/leave" onsubmit="return confirm('Make AutoAuth leave '+${JSON.stringify(g.name)}+'? This cannot be undone from the dashboard.')"><button class="btn secondary" style="background:#7f1d1d;border-color:#991b1b;color:white">Leave server</button></form></td></tr>`).join("")||"<tr><td colspan=5>Bot is not in any servers.</td></tr>"}</table></div></div>`;
-  res.send(shell("home",req.session.owner,content));
- }catch(e){console.error(e);res.status(500).send("Dashboard failed to load.");}
-});
-app.post("/dashboard/servers/:id/addusers",logged,verifyOrigin,async(req,res)=>{
- const guildId=String(req.params.id||"");
- if(!/^\d{17,20}$/.test(guildId)) return res.status(400).send("Invalid server ID.");
- if(!client.isReady()) return res.status(503).send("Discord bot is disconnected.");
- const guild=client.guilds.cache.get(guildId);
- if(!guild) return res.status(404).send("That server was not found in the bot's current server list.");
- if(addJobs.get(guildId)?.running) return res.redirect(303,"/dashboard");
- const owner=req.session.owner, job={running:true,startedAt:Date.now(),by:owner}; addJobs.set(guildId,job);
- await log("addusers_started",{guild_id:guildId,guild_name:guild.name,source:"dashboard"},owner);
- // Runs in the background so the request returns immediately; the result shows on the server row and in Logs.
- (async()=>{try{
-   const result=await addAllToGuild(guild);
-   addJobs.set(guildId,{running:false,finishedAt:Date.now(),by:owner,result});
-   await log("addusers_finished",{guild_id:guildId,guild_name:guild.name,source:"dashboard",total:result.total,added:result.added,already:result.already,failed:result.failed,examples:result.examples},owner);
-  }catch(e){
-   addJobs.set(guildId,{running:false,finishedAt:Date.now(),by:owner,error:String(e.message).slice(0,160)});
-   await log("addusers_failed",{guild_id:guildId,guild_name:guild.name,source:"dashboard",error:e.message},owner);
-  }})();
- return res.redirect(303,"/dashboard");
-});
-app.post("/dashboard/users/:id/optout",logged,verifyOrigin,async(req,res)=>{
- const uid=String(req.params.id||"");
- if(!/^\d{17,20}$/.test(uid)) return res.status(400).send("Invalid user ID.");
- try{
-  const had=await optOutUser(uid);
-  await log("user_opted_out",{note:had?"Owner opted a user out from the dashboard; record and related log entries deleted.":"Owner opt-out: no record found."},req.session.owner);
-  return res.redirect(303,"/dashboard");
- }catch(e){console.error("Dashboard opt-out failed",e);return res.status(500).send("Opt-out failed. Check Render logs.");}
-});
-app.post("/dashboard/servers/:id/leave",logged,verifyOrigin,async(req,res)=>{
- const guildId=String(req.params.id||"");
- if(!/^\d{17,20}$/.test(guildId)) return res.status(400).send("Invalid server ID.");
- if(!client.isReady()) return res.status(503).send("Discord bot is disconnected.");
- const guild=client.guilds.cache.get(guildId);
- if(!guild) return res.status(404).send("That server was not found in the bot's current server list.");
- const guildName=guild.name;
- try {
-   await guild.leave();
-   await log("bot_left_server",{guild_id:guildId,guild_name:guildName},req.session.owner);
-   return res.redirect(303,"/dashboard");
- } catch(e) {
-   await log("bot_leave_server_failed",{guild_id:guildId,guild_name:guildName,error:e.message},req.session.owner);
-   console.error("Failed to leave server",e);
-   return res.status(500).send("Could not leave that server. Check Render logs.");
- }
-});
-app.post("/dashboard/presence",logged,verifyOrigin,async(req,res)=>{
- const status=String(req.body.status||"online"),kind=String(req.body.kind||"none"),text=String(req.body.text||"").trim().slice(0,128);
- if(!["online","idle","dnd","invisible"].includes(status))return res.status(400).send("Invalid status.");
- const types={Playing:ActivityType.Playing,Listening:ActivityType.Listening,Watching:ActivityType.Watching,Competing:ActivityType.Competing};
- if(kind!=="none"&&!Object.hasOwn(types,kind))return res.status(400).send("Invalid activity.");
- if(!client.isReady())return res.status(503).send("Discord bot is disconnected.");
- client.user.setPresence({status,activities:kind!=="none"&&text?[{name:text,type:types[kind]}]:[]});
- await log("presence_updated",{status,kind,text},req.session.owner);res.redirect(303,"/dashboard");
-});
+require("./dashboard")({app,express,pool,client,esc,log,logged,verifyOrigin,displayActor,displayDetail,ActivityType,
+  core:{OWNER_IDS,isExpired,addUserToGuild,addAllToGuild,kickFromGuild,optOutUser,sendDmTo,connectDiscord,discordState}});
 
-app.get("/dashboard/database",logged,async(req,res)=>{
- try{
-  const q=String(req.query.q||"").slice(0,100),[r,tot]=await Promise.all([pool.query("SELECT user_id,username,authorized_at,expires_at FROM authorized_users WHERE user_id ILIKE $1 OR username ILIKE $1 ORDER BY authorized_at DESC LIMIT 300",[`%${q}%`]),pool.query("SELECT COUNT(*)::int n FROM authorized_users")]);
-  const ts=x=>esc(new Date(x).toISOString().replace("T"," ").slice(0,19));
-  const content=`<div class="top"><div><h1>Database</h1><p class="muted">Stored linked accounts; tokens are never displayed. Showing ${r.rows.length} of ${tot.rows[0].n}.</p></div><a class="btn secondary" href="/dashboard/database/export.csv">Export CSV</a></div><div class="card"><form class="row" method="get"><div><label>Search username or Discord ID</label><input name="q" value="${esc(q)}"></div><div><button>Search</button></div></form><div class="wrap"><table><tr><th>Username</th><th>Discord ID</th><th>Authorized at (UTC)</th><th>Token</th><th>Action</th></tr>${r.rows.map(u=>`<tr><td>${esc(u.username)}</td><td>${esc(u.user_id)}</td><td>${ts(u.authorized_at)}</td><td>${Number(u.expires_at)>Date.now()?"Valid until "+ts(Number(u.expires_at)):"Refreshes on next use"}</td><td><form method="post" action="/dashboard/database/${encodeURIComponent(u.user_id)}/revoke" onsubmit="return confirm('Revoke saved authorization?')"><button class="danger">Revoke</button></form></td></tr>`).join("")||"<tr><td colspan=5>No records.</td></tr>"}</table></div></div><p class="notice">Revoke deletes the saved OAuth tokens. It does not remove the user from Discord servers they already joined. The CSV contains usernames, IDs and dates only, never tokens.</p>`;
-  res.send(shell("db",req.session.owner,content));
- }catch(e){console.error(e);res.status(500).send("Database view failed.");}
-});
-app.get("/dashboard/database/export.csv",logged,async(req,res)=>{
- try{
-  const r=await pool.query("SELECT user_id,username,authorized_at FROM authorized_users ORDER BY authorized_at DESC");
-  const cell=v=>{let t=String(v??"");if(/^[=+\-@\t\r]/.test(t))t="'"+t;return '"'+t.replace(/"/g,'""')+'"';};
-  const csv=["user_id,username,authorized_at_utc",...r.rows.map(u=>[u.user_id,u.username,new Date(u.authorized_at).toISOString()].map(cell).join(","))].join("\r\n");
-  await log("database_exported",{rows:r.rows.length},req.session.owner);
-  res.set({"Content-Type":"text/csv; charset=utf-8","Content-Disposition":'attachment; filename="autoauth-users.csv"',"Cache-Control":"no-store"}).send(csv);
- }catch(e){console.error(e);res.status(500).send("Export failed.");}
-});
-app.post("/dashboard/database/:id/revoke",logged,verifyOrigin,async(req,res)=>{
- const id=String(req.params.id),r=await pool.query("DELETE FROM authorized_users WHERE user_id=$1 RETURNING username",[id]);
- await log("authorization_revoked",{user_id:id,username:r.rows[0]?.username||null},req.session.owner);res.redirect(303,"/dashboard/database");
-});
-app.get("/dashboard/logs",logged,async(req,res)=>{
- try{
-  const type=String(req.query.type||"").slice(0,60),q=String(req.query.q||"").slice(0,100),per=100,page=Math.max(1,Math.min(100000,parseInt(req.query.page,10)||1));
-  const where="WHERE ($1='' OR event_type=$1) AND ($2='' OR actor ILIKE $3 OR detail::text ILIKE $3)",args=[type,q,`%${q}%`];
-  const [r,cnt,types]=await Promise.all([pool.query(`SELECT id,event_type,actor,detail,created_at FROM audit_logs ${where} ORDER BY id DESC LIMIT ${per} OFFSET ${(page-1)*per}`,args),pool.query(`SELECT COUNT(*)::int n FROM audit_logs ${where}`,args),pool.query("SELECT DISTINCT event_type FROM audit_logs ORDER BY event_type")]);
-  const pages=Math.max(1,Math.ceil(cnt.rows[0].n/per)),link=p=>`/dashboard/logs?${new URLSearchParams({type,q,page:String(p)})}`;
-  const content=`<div class="top"><div><h1>Logs</h1><p class="muted">${cnt.rows[0].n} matching events · page ${page} of ${pages}</p></div></div><div class="card"><form class="row" method="get"><div><label>Event type</label><select name="type"><option value="">All events</option>${types.rows.map(t=>`<option value="${esc(t.event_type)}"${t.event_type===type?" selected":""}>${esc(t.event_type)}</option>`).join("")}</select></div><div><label>Search actor or details</label><input name="q" value="${esc(q)}"></div><div><button>Filter</button></div></form><div class="wrap"><table><tr><th>Time UTC</th><th>Event</th><th>Actor</th><th>Details</th></tr>${r.rows.map(x=>`<tr><td>${esc(new Date(x.created_at).toISOString().replace("T"," ").slice(0,19))}</td><td>${esc(x.event_type)}</td><td>${esc(displayActor(x.actor))}</td><td><pre>${esc(displayDetail(x.detail))}</pre></td></tr>`).join("")||"<tr><td colspan=4>No log entries match.</td></tr>"}</table></div><div class="row" style="margin-top:14px">${page>1?`<a class="btn secondary" href="${link(page-1)}">← Newer</a>`:""}${page<pages?`<a class="btn secondary" href="${link(page+1)}">Older →</a>`:""}</div></div>`;
-  res.send(shell("logs",req.session.owner,content));
- }catch(e){console.error(e);res.status(500).send("Logs failed to load.");}
-});
-
+// ---------- Discord events ----------
 client.once("ready",()=>console.log(`Discord bot logged in as ${client.user.tag}`));
 client.on("error",e=>console.error("Discord error",e));
-const PRIMARY_OWNER_DISCORD_ID = "1426813617394946068";
 client.on("interactionCreate",async i=>{
  if(!i.isChatInputCommand())return;
- if(i.commandName==="auth"){await log("auth_command_used",{user_id:i.user.id,guild_id:i.guildId},i.user.id);return i.reply({content:`Connect your account: ${authUrl()}`,flags:MessageFlags.Ephemeral});}
+ if(i.commandName==="auth"){
+  await log("auth_command_used",{user_id:i.user.id,guild_id:i.guildId},i.user.id);
+  const url=new URL("/auth",process.env.REDIRECT_URI).href;
+  const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel("Open authorization page").setURL(url));
+  return i.reply({content:`Authorize AutoAuth on the website: ${url}`,components:[row],flags:MessageFlags.Ephemeral});
+ }
  if(i.commandName==="optout"){
    await i.deferReply({flags:MessageFlags.Ephemeral});
+   const type=["server","dm","all"].includes(i.options.getString("type"))?i.options.getString("type"):"all";
    try{
-     const had=await optOutUser(i.user.id);
-     if(!had)return i.editReply("You have no authorization saved with AutoAuth, so there is nothing to delete.");
-     await log("user_opted_out",{note:"A user opted out; their record and related log entries were deleted."});
-     return i.editReply("You have been opted out. Your saved authorization and related log entries were deleted. This does not remove you from servers you already joined. Run /auth any time to link again.");
+     const r=await optOutUser(i.user.id,type);
+     if(!r.had)return i.editReply("You have no authorization saved with AutoAuth, so there is nothing to delete.");
+     await log("user_opted_out",{note:`A user opted out (${type}).`,type});
+     if(!r.deleted) return i.editReply(r.changed
+       ?`You have opted out of ${type==="server"?"server joins":"direct messages"}. Your other permission is still active; use /optout with "Everything" to delete your data.`
+       :`You had not allowed ${type==="server"?"server joins":"direct messages"}, so nothing changed.`);
+     return i.editReply("You have been opted out of everything. Your saved authorization and related log entries were deleted. This does not remove you from servers you already joined. Run /auth any time to link again.");
    }catch(e){console.error("Opt-out failed",e);return i.editReply("Something went wrong while deleting your data. Please try again or ask in the Discord server.");}
  }
  if(!["addusers","adduser"].includes(i.commandName))return;
@@ -301,10 +240,10 @@ client.on("interactionCreate",async i=>{
    catch(e) { console.error("Database lookup failed",e); return i.editReply("Database error. Check Render logs."); }
    if(!row)return i.editReply("That user has not authorized AutoAuth yet. They must use /auth and complete authorization first.");
    try {
-     let at=dec(row.access_token_enc),rt=dec(row.refresh_token_enc);
-     if(Number(row.expires_at)<=Date.now()+60000){const t=await refresh(rt);at=t.access_token;rt=t.refresh_token||rt;await pool.query("UPDATE authorized_users SET access_token_enc=$1,refresh_token_enc=$2,expires_at=$3 WHERE user_id=$4",[enc(at),enc(rt),Date.now()+Number(t.expires_in||604800)*1000,uid]);}
-     try { await i.guild.members.fetch(uid); await log("adduser_already_present",{guild_id:i.guildId,guild_name:i.guild.name,target_user_id:uid},i.user.id); return i.editReply(`<@${uid}> is already in **${i.guild.name}**.`); } catch {}
-     await i.guild.members.add(uid,{accessToken:at});
+     const out=await addUserToGuild(i.guild,row);
+     if(out==="skipped_no_server") return i.editReply("That user did not allow server joins.");
+     if(out==="skipped_expired") return i.editReply("That user's authorization has expired.");
+     if(out==="already"){ await log("adduser_already_present",{guild_id:i.guildId,guild_name:i.guild.name,target_user_id:uid},i.user.id); return i.editReply(`<@${uid}> is already in **${i.guild.name}**.`); }
      await log("adduser_finished",{guild_id:i.guildId,guild_name:i.guild.name,target_user_id:uid,result:"added"},i.user.id);
      return i.editReply(`Added <@${uid}> to **${i.guild.name}**.`);
    } catch(e) {
@@ -316,10 +255,12 @@ client.on("interactionCreate",async i=>{
  await pool.query("UPDATE command_stats SET uses=uses+1 WHERE command_name='addusers'");
  await log("addusers_started",{guild_id:i.guildId,guild_name:i.guild.name,admin_id:i.user.id},i.user.id);
  let res;try{res=await addAllToGuild(i.guild);}catch(e){console.error(e);return i.editReply("Database error. Check Render logs.");}
- const {added,already,failed,examples}=res;
- await log("addusers_finished",{guild_id:i.guildId,guild_name:i.guild.name,admin_id:i.user.id,total:res.total,added,already,failed},i.user.id);
- return i.editReply(`Finished for **${i.guild.name}**.\nAdded: **${added}**\nAlready in server: **${already}**\nFailed: **${failed}**${examples.length?"\n\n"+examples.join("\n"):""}`);
+ const {added,already,failed,skipped,examples}=res;
+ await log("addusers_finished",{guild_id:i.guildId,guild_name:i.guild.name,admin_id:i.user.id,total:res.total,added,already,failed,skipped},i.user.id);
+ return i.editReply(`Finished for **${i.guild.name}**.\nAdded: **${added}**\nAlready in server: **${already}**\nFailed: **${failed}**${skipped?`\nSkipped (expired): **${skipped}**`:""}${examples.length?"\n\n"+examples.join("\n"):""}`);
 });
 app.listen(port,"0.0.0.0",()=>console.log(`HTTP server listening on port ${port}`));
-(async()=>{try{await schema();await register();await client.login(process.env.BOT_TOKEN);}catch(e){console.error("Startup failed",e);process.exit(1);}})();
-setInterval(()=>{for(const [s,t] of states)if(t<Date.now())states.delete(s);},60000).unref();
+(async()=>{
+ try{ await schema(); }catch(e){ console.error("Database setup failed",e); process.exit(1); }
+ await connectDiscord(); // non-fatal: the dashboard shows a Retry button if this fails
+})();
