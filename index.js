@@ -3,7 +3,7 @@ const crypto = require("node:crypto");
 const express = require("express");
 const session = require("express-session");
 const { Pool } = require("pg");
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits, ActivityType } = require("discord.js");
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits, ActivityType, MessageFlags } = require("discord.js");
 
 const required = ["BOT_TOKEN","CLIENT_ID","CLIENT_SECRET","REDIRECT_URI","DATABASE_URL","TOKEN_ENCRYPTION_KEY","SESSION_SECRET","DASHBOARD_OWNER1_USER","DASHBOARD_OWNER1_PASSWORD_HASH","DASHBOARD_OWNER2_USER","DASHBOARD_OWNER2_PASSWORD_HASH"];
 for (const k of required) if (!process.env[k]) { console.error("Missing Render environment variable:", k); process.exit(1); }
@@ -85,7 +85,7 @@ function shell(tab,owner,content) {
  </style></head><body><div class="layout"><aside class="side"><div class="brand">◈ AutoAuth</div><nav class="nav">
  <a class="${tab==="home"?"on":""}" href="/dashboard">Bot Control</a><a class="${tab==="db"?"on":""}" href="/dashboard/database">Database</a><a class="${tab==="logs"?"on":""}" href="/dashboard/logs">Logs</a></nav><p class="muted" style="margin:28px 12px">Signed in as <b>${esc(owner)}</b></p><form method="post" action="/dashboard/logout"><button class="secondary" style="width:100%">Log out</button></form></aside><main>${content}</main></div></body></html>`;
 }
-app.get("/",(_,res)=>res.redirect("/dashboard"));
+require("./site")(app,client); // public site: /, /info, /tos, /privacy-policy
 app.get("/health",(_,res)=>res.send("ok"));
 app.get("/auth",(_,res)=>res.redirect(302,authUrl()));
 app.get("/oauth/callback",async(req,res)=>{
@@ -182,19 +182,19 @@ client.on("error",e=>console.error("Discord error",e));
 const PRIMARY_OWNER_DISCORD_ID = "1426813617394946068";
 client.on("interactionCreate",async i=>{
  if(!i.isChatInputCommand())return;
- if(i.commandName==="auth"){await log("auth_command_used",{user_id:i.user.id,guild_id:i.guildId},i.user.id);return i.reply({content:`Connect your account: ${authUrl()}`,ephemeral:true});}
+ if(i.commandName==="auth"){await log("auth_command_used",{user_id:i.user.id,guild_id:i.guildId},i.user.id);return i.reply({content:`Connect your account: ${authUrl()}`,flags:MessageFlags.Ephemeral});}
  if(!["addusers","adduser"].includes(i.commandName))return;
  // Discord application-command default permissions require Administrator.
  // Re-check at runtime as a defense-in-depth permission gate.
- if(!i.inGuild()||!i.guild)return i.reply({content:"Run this in the target server.",ephemeral:true});
+ if(!i.inGuild()||!i.guild)return i.reply({content:"Run this in the target server.",flags:MessageFlags.Ephemeral});
  if(!i.memberPermissions?.has("Administrator")) {
    await log("unauthorized_add_command_attempt",{command:i.commandName,user_id:i.user.id,guild_id:i.guildId},i.user.id);
-   return i.reply({content:"You need the Administrator permission to use this command.",ephemeral:true});
+   return i.reply({content:"You need the Administrator permission to use this command.",flags:MessageFlags.Ephemeral});
  }
- await i.deferReply({ephemeral:true});
+ await i.deferReply({flags:MessageFlags.Ephemeral});
  if(i.commandName==="adduser") {
    const uid=String(i.options.getString("user_id",true)).trim();
-   if(!/^\\d{17,20}$/.test(uid))return i.editReply("Invalid Discord user ID.");
+   if(!/^\d{17,20}$/.test(uid))return i.editReply("Invalid Discord user ID.");
    let row;
    try { const q=await pool.query("SELECT * FROM authorized_users WHERE user_id=$1",[uid]); row=q.rows[0]; }
    catch(e) { console.error("Database lookup failed",e); return i.editReply("Database error. Check Render logs."); }
@@ -202,10 +202,10 @@ client.on("interactionCreate",async i=>{
    try {
      let at=dec(row.access_token_enc),rt=dec(row.refresh_token_enc);
      if(Number(row.expires_at)<=Date.now()+60000){const t=await refresh(rt);at=t.access_token;rt=t.refresh_token||rt;await pool.query("UPDATE authorized_users SET access_token_enc=$1,refresh_token_enc=$2,expires_at=$3 WHERE user_id=$4",[enc(at),enc(rt),Date.now()+Number(t.expires_in||604800)*1000,uid]);}
-     try { await i.guild.members.fetch(uid); await log("adduser_already_present",{guild_id:i.guildId,guild_name:i.guild.name,target_user_id:uid},i.user.id); return i.editReply(`<@${uid}> is already in **${esc(i.guild.name)}**.`); } catch {}
+     try { await i.guild.members.fetch(uid); await log("adduser_already_present",{guild_id:i.guildId,guild_name:i.guild.name,target_user_id:uid},i.user.id); return i.editReply(`<@${uid}> is already in **${i.guild.name}**.`); } catch {}
      await i.guild.members.add(uid,{accessToken:at});
      await log("adduser_finished",{guild_id:i.guildId,guild_name:i.guild.name,target_user_id:uid,result:"added"},i.user.id);
-     return i.editReply(`Added <@${uid}> to **${esc(i.guild.name)}**.`);
+     return i.editReply(`Added <@${uid}> to **${i.guild.name}**.`);
    } catch(e) {
      await log("adduser_failed",{guild_id:i.guildId,guild_name:i.guild.name,target_user_id:uid,error:e.message},i.user.id);
      console.warn("Add single user failed",uid,e.message);
@@ -223,7 +223,7 @@ client.on("interactionCreate",async i=>{
   await i.guild.members.add(u.user_id,{accessToken:at});added++;
  }catch(e){failed++;if(examples.length<5)examples.push(`${u.username} (${u.user_id}): ${String(e.message).slice(0,120)}`);console.warn("Add user failed",u.user_id,e.message);}
  await log("addusers_finished",{guild_id:i.guildId,guild_name:i.guild.name,admin_id:i.user.id,total:r.rows.length,added,already,failed},i.user.id);
- return i.editReply(`Finished for **${esc(i.guild.name)}**.\\nAdded: **${added}**\\nAlready in server: **${already}**\\nFailed: **${failed}**${examples.length?"\\n\\n"+examples.join("\\n"):""}`);
+ return i.editReply(`Finished for **${i.guild.name}**.\nAdded: **${added}**\nAlready in server: **${already}**\nFailed: **${failed}**${examples.length?"\n\n"+examples.join("\n"):""}`);
 });
 app.listen(port,"0.0.0.0",()=>console.log(`HTTP server listening on port ${port}`));
 (async()=>{try{await schema();await register();await client.login(process.env.BOT_TOKEN);}catch(e){console.error("Startup failed",e);process.exit(1);}})();

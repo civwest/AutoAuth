@@ -25,3 +25,8 @@ The PostgreSQL schema is created automatically. Dashboard sessions are stored in
 - The `/addusers` and `/adduser user_id` commands require the Discord Administrator permission. `/adduser` adds one account that has already completed `/auth`. The commands also enforce Administrator permission at runtime.
 - The bot's application-install visibility must also be restricted in the Discord Developer Portal if you want to prevent other people from using an installation link to add the bot to their servers. Code-level command restrictions prevent others from running the bulk/single-user add commands.
 - New dependency `connect-pg-simple` uses the existing `DATABASE_URL`; no new database service is required.
+
+## Public website
+`site.js` serves `/` (bot status), `/info`, `/tos` and `/privacy-policy`; `/home` redirects to `/`. The dashboard and `/login` are unchanged.
+
+Images: save the background as `public/bg.webp` and the logo/favicon as `public/icon.webp`. They are served at `/assets/bg.webp` and `/assets/icon.webp`. If those files are missing, the site falls back to the original Discord CDN links, which expire.
