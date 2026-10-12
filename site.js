@@ -30,7 +30,9 @@ const CSS = `
 body{margin:0;font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#1a1a1a;background:#000}
 a{color:inherit}
 .bg{position:fixed;inset:0;z-index:-1;background:#111 url(/assets/bg.webp) 50% 18%/cover no-repeat}
-.nav{position:fixed;top:0;left:0;right:0;height:56px;background:#000;z-index:10;display:flex;justify-content:flex-end;align-items:center;gap:6px;padding:0 20px}
+.nav{position:fixed;top:0;left:0;right:0;height:56px;background:#000;z-index:10;display:flex;justify-content:space-between;align-items:center;gap:6px;padding:0 20px}
+.nav .grp{display:flex;align-items:center;gap:6px}
+.nav a.tab.login{background:#fff;color:#000;padding:8px 18px}.nav a.tab.login:hover{background:#d1d5db}
 .nav a.tab{color:#fff;text-decoration:none;padding:8px 14px;border-radius:8px;font-weight:600;font-size:15px}
 .nav a.tab:hover,.nav a.tab.on{background:#222}
 .nav .logo{display:block;width:34px;height:34px;margin-left:8px;border-radius:8px;object-fit:cover}
@@ -73,8 +75,9 @@ function layout({ title, active, gap = "72vh", body }) {
 <style>${CSS}</style></head><body>
 <div class="bg"></div>
 <header class="nav">
-${nav("/", "Home", "home")}${nav("/info", "Info", "info")}<a class="tab" href="${LINKS.docs}" target="_blank" rel="noopener">Documentation</a>
-<a href="/" aria-label="AutoAuth home"><img class="logo" src="/assets/icon.webp" alt="AutoAuth"></a>
+<div class="grp"><a class="tab login" href="/login">Login</a></div>
+<div class="grp">${nav("/", "Home", "home")}${nav("/info", "Info", "info")}<a class="tab" href="${LINKS.docs}" target="_blank" rel="noopener">Documentation</a>
+<a href="/" aria-label="AutoAuth home"><img class="logo" src="/assets/icon.webp" alt="AutoAuth"></a></div>
 </header>
 <div class="spacer" style="--gap:${gap}"></div>
 <main class="panel"><div class="in">${body}</div></main>
