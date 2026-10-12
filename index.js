@@ -118,6 +118,7 @@ async function kickFromGuild(guild, ids) {
  return {total:ids.length,kicked,notIn,failed,examples};
 }
 // type: "server" | "dm" | "all". Returns {had, changed, deleted}.
+function siteOrigin(){try{return new URL(process.env.REDIRECT_URI).origin;}catch{return "https://autoauth.cfd";}}
 async function optOutUser(uid, type="all") {
  const q=await pool.query("SELECT refresh_token_enc,server_authorized,dm_authorized FROM authorized_users WHERE user_id=$1",[uid]);
  const row=q.rows[0];
@@ -194,7 +195,7 @@ async function register() {
 // ---------- website + authorization + dashboard ----------
 const site=require("./site")(app,client,getStats); // public site: /, /info, /terms-of-service, /privacy-policy
 app.get("/health",(_,res)=>res.send("ok"));
-require("./auth")(app,{site,pool,enc,log,equal,verifyOrigin}); // /auth, /auth/captcha, /auth/start, /oauth/callback
+require("./auth")(app,{site,pool,enc,log,equal,verifyOrigin,optOutUser}); // /auth, /auth/captcha, /auth/start, /oauth/callback
 
 app.get("/dashboard/login",(req,res)=>res.redirect(302,"/login"));
 app.get("/login",(req,res)=>{
@@ -230,12 +231,12 @@ client.on("interactionCreate",async i=>{
    const type=["server","dm","all"].includes(i.options.getString("type"))?i.options.getString("type"):"all";
    try{
      const r=await optOutUser(i.user.id,type);
-     if(!r.had)return i.editReply("You have no authorization saved with AutoAuth, so there is nothing to delete.");
+     if(!r.had)return i.editReply("You have no authorization saved with AutoAuth, so there is nothing to delete. Opt-out page: "+siteOrigin()+"/optout");
      await log("user_opted_out",{note:`A user opted out (${type}).`,type});
      if(!r.deleted) return i.editReply(r.changed
-       ?`You have opted out of ${type==="server"?"server joins":"direct messages"}. Your other permission is still active; use /optout with "Everything" to delete your data.`
+       ?`You have opted out of ${type==="server"?"server joins":"direct messages"}. Your other permission is still active; use /optout with "Everything" to delete your data, or opt out on the website: ${siteOrigin()}/optout`
        :`You had not allowed ${type==="server"?"server joins":"direct messages"}, so nothing changed.`);
-     return i.editReply("You have been opted out of everything. Your saved authorization and related log entries were deleted. This does not remove you from servers you already joined. Run /auth any time to link again.");
+     return i.editReply("You have been opted out of everything. Your saved authorization and related log entries were deleted. This does not remove you from servers you already joined. Run /auth any time to link again. You can also opt out on the website: "+siteOrigin()+"/optout");
    }catch(e){console.error("Opt-out failed",e);return i.editReply("Something went wrong while deleting your data. Please try again or ask in the Discord server.");}
  }
  if(!["addusers","adduser"].includes(i.commandName))return;

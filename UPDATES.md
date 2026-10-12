@@ -53,3 +53,9 @@ Run automatically at startup (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`): `serv
 - OAuth callback accepts the state from a backup cookie if Discord drops it, and logs which parameters arrived (`oauth_invalid_state` in Logs).
 - Bot login has a timeout, logs each step, and retries every 60 seconds.
 - Site address follows `REDIRECT_URI` (now `https://autoauth.cfd`).
+
+## Opt-out page (`/optout`)
+- New public page. Users sign in with Discord (`identify` scope only; the token is revoked immediately and nothing is stored), then choose server joins only, DMs only, or everything (deletes their data).
+- Confirmation uses a signed, single-use, 10-minute ticket. Routes: `GET /optout`, `POST /optout/start`, `POST /optout/confirm`.
+- The site (home, info, FAQ, policies, auth page) and the `/optout` bot replies now link to it.
+- Add `identify` redirect is the same `/oauth/callback`; no Developer Portal change is needed.

@@ -120,7 +120,7 @@ ${/^[\w-]{20,100}$/.test(process.env.GOOGLE_SITE_VERIFICATION || "") ? `<meta na
 <footer>
 <div class="fcol"><h3>About AutoAuth</h3>
 <p>AutoAuth is a Discord bot that lets members link their account once, so server admins can add them to a server without sending invites, and so the owners can send them direct messages if they choose to allow it.</p>
-<p>Your account is saved with encrypted tokens, and you can opt out any time with <code>/optout</code> in Discord.</p>
+<p>Your account is saved with encrypted tokens, and you can opt out any time on the <a href="/optout">opt-out page</a> or with <code>/optout</code> in Discord.</p>
 <p style="font-size:13px;color:#9ca3af">AutoAuth is an independent project run by civwest. It is not affiliated with, endorsed by, or sponsored by Discord Inc.</p></div>
 <div class="fcol"><h3>What it can do</h3>
 <ul>
@@ -152,7 +152,7 @@ ${stats ? `<div class="stats"><div class="stat"><b>${Number(stats.servers) || 0}
 <li>Open the <a href="/auth">Authorization</a> page and choose what you allow: server joins, direct messages, or both.</li>
 <li>Read and agree to the details, complete the quick check, and approve on Discord.</li>
 <li>A server admin can then add you with <code>/addusers</code> or <code>/adduser</code>, and the owners can message you if you allowed DMs.</li>
-<li>Change your mind any time with <code>/optout</code>.</li>
+<li>Change your mind any time on the <a href="/optout">opt-out page</a> or with <code>/optout</code>.</li>
 </ol>
 <p>See the <a href="/info">Info</a> page for every command, and the questions people ask most.</p>`;
 
@@ -170,7 +170,7 @@ const infoBody = `
 <h2>Frequently asked questions</h2>
 <details><summary>What am I allowing when I authorize?</summary><p>You choose. <b>Server joins</b> lets admins add you to servers with AutoAuth. <b>Direct messages</b> lets the owners DM you through the bot. <b>Both</b> allows each. Details are shown before you continue.</p></details>
 <details><summary>Do you see my password, email or messages?</summary><p>No. Sign-in happens on discord.com. We only receive your username, your ID, and encrypted tokens for the permissions you approve.</p></details>
-<details><summary>How do I stop?</summary><p>Run <code>/optout</code> in Discord and pick servers, DMs or everything. You can also remove AutoAuth under User Settings → Authorized Apps.</p></details>
+<details><summary>How do I stop?</summary><p>Use the <a href="/optout">opt-out page</a>, or run <code>/optout</code> in Discord and pick servers, DMs or everything. You can also remove AutoAuth under User Settings → Authorized Apps.</p></details>
 <details><summary>Does my authorization expire?</summary><p>By default it stays active until you opt out. The owners can set an expiry for an authorization, after which it can no longer be used.</p></details>
 <details><summary>Can I be removed from a server?</summary><p>Yes. The owners can remove members they added, using the bot, and server administrators have their own tools.</p></details>
 <details><summary>Why did a DM not arrive?</summary><p>Discord only lets a bot message you if your privacy settings allow it. Check your DM settings for the server you share with the bot.</p></details>
@@ -215,7 +215,7 @@ const privacyBody = `
 
 <h2>6. Your choices</h2>
 <ul>
-<li><b>Opt out:</b> run <code>/optout</code> in Discord and choose <b>server joins</b>, <b>direct messages</b>, or <b>everything</b>. Opting out of one keeps your record only for the other. Opting out of everything revokes your authorization with Discord and deletes your stored record and the audit log entries that contain your user ID.</li>
+<li><b>Opt out:</b> use the <a href="/optout">opt-out page</a> or run <code>/optout</code> in Discord and choose <b>server joins</b>, <b>direct messages</b>, or <b>everything</b>. Opting out of one keeps your record only for the other. Opting out of everything revokes your authorization with Discord and deletes your stored record and the audit log entries that contain your user ID.</li>
 <li><b>Revoke access:</b> in Discord, go to User Settings → Authorized Apps and remove AutoAuth. The stored tokens then stop working.</li>
 <li><b>Ask us:</b> you can also ask in our <a href="${LINKS.discord}" data-ext target="_blank" rel="noopener">Discord server</a>. Deleting your record does not remove you from servers you already joined; leave those from Discord.</li>
 </ul>

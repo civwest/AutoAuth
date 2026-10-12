@@ -12,12 +12,13 @@ const crypto = require("node:crypto");
 const MODES = {
   server: { code: "s", scope: ["guilds.join", "identify"], userInstall: false },
   dm: { code: "d", scope: ["identify", "applications.commands"], userInstall: true },
+  optout: { code: "o", scope: ["identify"], userInstall: false },
   all: { code: "a", scope: ["identify", "applications.commands", "guilds.join"], userInstall: true },
 };
 const BY_CODE = Object.fromEntries(Object.entries(MODES).map(([k, v]) => [v.code, k]));
 
 module.exports = function mountAuth(app, ctx) {
-  const { site, pool, enc, log, equal, verifyOrigin } = ctx;
+  const { site, pool, enc, log, equal, verifyOrigin, optOutUser } = ctx;
   const secret = process.env.SESSION_SECRET;
   const used = new Map(); // nonce -> expiry (single-use state + captcha tokens)
   const hits = new Map(); // rate limiting
@@ -43,6 +44,7 @@ module.exports = function mountAuth(app, ctx) {
     used.set("s" + n, Number(exp));
     return BY_CODE[c];
   }
+  function discordUrlFor(mode) { return discordUrl(mode); }
   function discordUrl(mode) {
     const m = MODES[mode], u = new URL("https://discord.com/oauth2/authorize");
     u.searchParams.set("client_id", process.env.CLIENT_ID);
@@ -99,7 +101,7 @@ ${err}
 <button type="button" class="authopt" onclick="openAgree('all')"><b>Allow Both</b><span>Server joins and direct messages in one approval.</span></button>
 </div>
 <noscript><p class="banner">JavaScript is required for the captcha on this page.</p></noscript>
-<p class="updated">Already authorized? Run <code>/optout</code> in Discord any time to opt out of servers, DMs or everything. AutoAuth is an independent project run by civwest and is not affiliated with Discord Inc.</p>
+<p class="updated">Already authorized? Opt out any time on the <a href="/optout">opt-out page</a> or with <code>/optout</code> in Discord to opt out of servers, DMs or everything. AutoAuth is an independent project run by civwest and is not affiliated with Discord Inc.</p>
 <dialog class="dlg" id="agree">
 <form method="post" action="/auth/start" id="agree-form">
 <h2 id="ag-title"></h2>
@@ -143,6 +145,30 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
     return res.set("Cache-Control", "no-store").redirect(303, url);
   });
 
+
+  // ---- self-service opt-out page ----
+  function makeTicket(uid) { const p = `${uid}.${Date.now() + 10 * 60 * 1000}.${crypto.randomBytes(8).toString("hex")}`; return `${p}.${hmac("optout:" + p)}`; }
+  app.get("/optout", (_, res) => res.send(site.page("Opt out", `<h1>Opt out of AutoAuth</h1><p>Sign in with Discord so we know the request is really from you. We only read your username and ID, and the sign-in token is revoked immediately. Then choose to turn off server joins, direct messages, or delete everything.</p>
+<form method="post" action="/optout/start"><button class="btn blue">Continue with Discord</button></form><p class="updated">You can also run <code>/optout</code> in Discord.</p>`, "auth")));
+  app.post("/optout/start", verifyOrigin, (req, res) => {
+    if (limited("optout:" + (req.ip || "?"), 15, 10 * 60 * 1000)) return res.status(429).send("Too many attempts. Try again later.");
+    return res.set("Cache-Control", "no-store").redirect(303, discordUrlFor("optout"));
+  });
+  app.post("/optout/confirm", verifyOrigin, async (req, res) => {
+    const [uid, exp, n, sig] = String((req.body || {}).ticket || "").split(".");
+    const type = String((req.body || {}).type || "");
+    if (!uid || !exp || !n || !sig || !equal(sig, hmac(`optout:${uid}.${exp}.${n}`)) || !(Number(exp) > Date.now()) || used.has("o" + n) || !["server", "dm", "all"].includes(type)) {
+      return res.status(400).send(site.page("Opt out", "<h1>This request expired</h1><p>Please <a href='/optout'>start again</a>.</p>", "auth"));
+    }
+    used.set("o" + n, Number(exp));
+    try {
+      const r = await optOutUser(uid, type);
+      if (!r.deleted) await log("user_optout", { user_id: uid, type, source: "website" });
+      const msg = r.deleted ? "Your authorization was revoked and your data was deleted." : type === "server" ? "Server joins are turned off. Your other permission is still active." : "Direct messages are turned off. Your other permission is still active.";
+      res.send(site.page("Opt out", `<h1>Done</h1><p>${msg}</p>`, "auth"));
+    } catch (e) { console.error(e); res.status(500).send(site.page("Opt out", "<h1>Something went wrong</h1><p>Please try again in a moment.</p>", "auth")); }
+  });
+
   // Old direct link now just leads to the page.
   app.get("/auth/start", (_, res) => res.redirect(302, "/auth"));
 
@@ -168,6 +194,20 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
       if (!r.ok) { await log("oauth_exchange_failed", { status: r.status, error: t.error }); return res.status(502).send(site.page("Authorization failed", `<h1>Authorization failed</h1><p>Discord rejected the sign-in. Please try again.</p>${retry}`, "auth")); }
       const ur = await fetch("https://discord.com/api/v10/users/@me", { headers: { Authorization: `Bearer ${t.access_token}` } }), u = await ur.json();
       if (!ur.ok || !u.id) { await log("oauth_user_fetch_failed", { status: ur.status }); return res.status(502).send(site.page("Authorization failed", `<h1>Could not read your account</h1><p>Discord did not return your account details. Please try again.</p>${retry}`, "auth")); }
+      if (mode === "optout") {
+        // Identity only: revoke this temporary token straight away, nothing is stored.
+        fetch("https://discord.com/api/v10/oauth2/token/revoke", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: process.env.CLIENT_ID, client_secret: process.env.CLIENT_SECRET, token: t.access_token, token_type_hint: "access_token" }) }).catch(() => {});
+        const q = await pool.query("SELECT server_authorized, dm_authorized FROM authorized_users WHERE user_id=$1", [u.id]);
+        const name = u.global_name || u.username || u.id;
+        if (!q.rows[0]) return res.send(site.page("Opt out", `<h1>Nothing to remove</h1><p>Hi ${String(name).replace(/[<>&"']/g, "")}, AutoAuth has no saved authorization for your account.</p>`, "auth"));
+        const row = q.rows[0];
+        const have = [row.server_authorized ? "server joins" : "", row.dm_authorized ? "direct messages" : ""].filter(Boolean).join(" and ") || "nothing active";
+        const ticket = makeTicket(u.id);
+        return res.send(site.page("Opt out", `<h1>Opt out of AutoAuth</h1><p>Signed in as <b>${String(name).replace(/[<>&"']/g, "")}</b>. Currently allowed: <b>${have}</b>.</p>
+<form method="post" action="/optout/confirm" style="display:flex;flex-direction:column;gap:10px;max-width:420px"><input type="hidden" name="ticket" value="${ticket}">
+${row.server_authorized ? '<button class="btn gray" name="type" value="server">Opt out of server joins only</button>' : ""}${row.dm_authorized ? '<button class="btn gray" name="type" value="dm">Opt out of direct messages only</button>' : ""}<button class="btn blue" name="type" value="all">Opt out of everything and delete my data</button></form>
+<p>Opting out of everything revokes the grant with Discord and deletes your saved record. You are not removed from any servers.</p>`, "auth"));
+      }
       // What was actually granted decides the flags; fall back to what was requested if Discord omits the scope field.
       const granted = typeof t.scope === "string" ? t.scope.split(/[ +]/) : MODES[mode].scope;
       const serverOk = mode !== "dm" && granted.includes("guilds.join");
