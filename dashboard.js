@@ -1,7 +1,7 @@
 // Owner dashboard: Bot Control, Database, DM Users, Logs.
 module.exports = function mountDashboard(c) {
   const { app, express, pool, client, esc, log, logged, verifyOrigin, displayActor, displayDetail, ActivityType, core } = c;
-  const { OWNER_IDS, isExpired, addUserToGuild, addAllToGuild, kickFromGuild, optOutUser, sendDmTo, connectDiscord, discordState } = core;
+  const { OWNER_IDS, isExpired, addUserToGuild, addAllToGuild, kickFromGuild, optOutUser, sendDmTo, connectDiscord, discordState, shutdownBot } = core;
 
   const EXPIRY = [["30m", "30 minutes"], ["1h", "1 hour"], ["6h", "6 hours"], ["12h", "12 hours"], ["1d", "1 day"], ["7d", "7 days"], ["30d", "30 days"], ["never", "Never"]];
   const INTERVALS = { "30m": "30 minutes", "1h": "1 hour", "6h": "6 hours", "12h": "12 hours", "1d": "1 day", "7d": "7 days", "30d": "30 days" };
@@ -160,8 +160,8 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
       const up = process.uptime(), upText = `${Math.floor(up / 86400)}d ${Math.floor(up % 86400 / 3600)}h ${Math.floor(up % 3600 / 60)}m`, ping = client.ws.ping >= 0 ? Math.round(client.ws.ping) + " ms" : "—", mem = Math.round(process.memoryUsage().rss / 1048576) + " MB";
       const guilds = client.guilds.cache.map((g) => ({ id: g.id, name: g.name, members: g.memberCount, joined: g.joinedAt }));
       const presence = client.user?.presence?.status || "offline", activity = client.user?.presence?.activities?.[0], ready = client.isReady();
-      const retry = ready ? "" : `<form method="post" action="/dashboard/discord/retry" style="display:inline-block;margin:0"><button class="btn">Retry</button></form>`;
-      const content = `<div class="top"><div><h1>Bot Control</h1><p class="muted">Actual Discord presence and bot statistics</p></div><div class="row" style="align-items:center;gap:10px;flex-wrap:nowrap"><span class="pill ${ready ? "" : "off"}">${ready ? "Gateway connected" : "Disconnected"}</span>${retry}</div></div>
+      const retry = ready ? "" : `<form method="post" action="/dashboard/discord/retry" style="display:inline-block;margin:0"><button class="btn">${discordState.paused ? "Start bot" : "Retry"}</button></form>`;
+      const content = `<div class="top"><div><h1>Bot Control</h1><p class="muted">Actual Discord presence and bot statistics</p></div><div class="row" style="align-items:center;gap:10px;flex-wrap:wrap"><span class="pill ${ready ? "" : "off"}">${ready ? "Gateway connected" : discordState.paused ? "Shut down" : "Disconnected"}</span>${retry}<form method="post" action="/dashboard/shutdown" style="display:inline-block;margin:0" onsubmit="return confirm('Shut down the Discord bot? The website and dashboard stay up. Use Start bot to bring it back.')"><button class="danger"${ready ? "" : " disabled"}>Shut down bot</button></form><form method="post" action="/dashboard/restart" style="display:inline-block;margin:0" onsubmit="return confirm('Restart the whole service? The site, dashboard and bot will be unavailable for about a minute.')"><button class="secondary">Restart service</button></form></div></div>
   ${!ready && discordState.lastError ? `<p class="muted">Last connection error: ${esc(discordState.lastError)}</p>` : ""}
   <div class="grid"><div class="card"><div class="muted">Discord connection</div><div class="metric">${ready ? "Online" : "Offline"}</div></div><div class="card"><div class="muted">Discord presence</div><div class="metric">${esc(presence)}</div><p class="muted">${activity ? esc(activity.name) : "No activity"}</p></div><div class="card"><div class="muted">Authorized users</div><div class="metric">${uc.rows[0].n}</div></div><div class="card"><div class="muted">/addusers uses</div><div class="metric">${cs.rows[0]?.uses || 0}</div></div><div class="card"><div class="muted">Servers</div><div class="metric">${guilds.length}</div></div><div class="card"><div class="muted">Log entries</div><div class="metric">${lc.rows[0].n}</div></div><div class="card"><div class="muted">Uptime</div><div class="metric">${upText}</div></div><div class="card"><div class="muted">Gateway latency</div><div class="metric">${ping}</div></div><div class="card"><div class="muted">Memory</div><div class="metric">${mem}</div></div><div class="card"><div class="muted">New authorizations</div><div class="metric">${n24.rows[0].n}</div><p class="muted">last 24h · ${n7.rows[0].n} in 7 days</p></div><div class="card"><div class="muted">Opt-outs</div><div class="metric">${oo.rows[0].n}</div></div><div class="card"><div class="muted">Failed logins (24h)</div><div class="metric">${fl.rows[0].n}</div></div></div>
   <div class="card"><h2>Quick actions</h2><p class="muted">Add or remove authorized members on a server, or opt a user out. Removing members needs the bot to have Kick Members (the invite asks for Administrator).</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button type="button" class="green" onclick="quickAdd()">Add users to a server</button><button type="button" class="danger" onclick="quickKick()">Remove a member</button><button type="button" class="danger" onclick="quickKickAll()">Remove all members from a server</button><button type="button" class="danger" onclick="quickOptOut()">Opt out a user</button></div></div>
@@ -176,11 +176,24 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
   app.post("/dashboard/discord/retry", logged, verifyOrigin, async (req, res) => {
     if (client.isReady()) flash(req, "Already connected to Discord.");
     else {
+      discordState.paused = false;
       await connectDiscord();
       await log("discord_retry", { connected: client.isReady(), error: client.isReady() ? "" : discordState.lastError }, req.session.owner);
       flash(req, client.isReady() ? "Reconnected to Discord." : `Still disconnected${discordState.lastError ? ": " + discordState.lastError : "."}`);
     }
     res.redirect(303, "/dashboard");
+  });
+
+  app.post("/dashboard/shutdown", logged, verifyOrigin, async (req, res) => {
+    await log("bot_shutdown", {}, req.session.owner);
+    await shutdownBot();
+    flash(req, "The Discord bot is shut down. The website and dashboard are still running. Use Start bot to bring it back.");
+    res.redirect(303, "/dashboard");
+  });
+  app.post("/dashboard/restart", logged, verifyOrigin, async (req, res) => {
+    await log("service_restart", {}, req.session.owner);
+    res.send(`<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="20;url=/dashboard"><title>Restarting</title><body style="font:16px system-ui;background:#0d1117;color:#e6edf3;padding:40px"><h1>Restarting AutoAuth…</h1><p>The service will be back in about a minute. This page returns to the dashboard automatically.</p></body>`);
+    setTimeout(() => process.exit(0), 500);
   });
 
   // ---------- server actions ----------

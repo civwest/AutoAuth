@@ -162,10 +162,10 @@ async function syncAuthorizations() {
  }
  console.log(`Authorization check: ${ok} valid, ${revoked} revoked, ${errors} could not be checked.`);
 }
-const discordState = { connecting:false, lastError:"", attempted:false };
+const discordState = { connecting:false, lastError:"", attempted:false, paused:false };
 const withTimeout=(p,ms,label)=>Promise.race([p,new Promise((_,r)=>setTimeout(()=>r(new Error(label+" timed out after "+ms/1000+"s")),ms))]);
 async function connectDiscord() {
- if(discordState.connecting||client.isReady()) return;
+ if(discordState.connecting||client.isReady()||discordState.paused) return;
  discordState.connecting=true;
  try{
   console.log("Connecting to Discord...");
@@ -179,7 +179,8 @@ async function connectDiscord() {
   console.error("Discord login failed:",e.message);
  }finally{ discordState.connecting=false; }
 }
-setInterval(()=>{ if(!client.isReady()) connectDiscord(); },60000).unref(); // automatic retry while disconnected
+async function shutdownBot(){ discordState.paused=true; try{ await client.destroy(); }catch(e){ console.warn("Shutdown error:",e.message); } }
+setInterval(()=>{ if(!client.isReady()&&!discordState.paused) connectDiscord(); },60000).unref(); // automatic retry while disconnected
 
 async function register() {
  const cmds=[new SlashCommandBuilder().setName("auth").setDescription("Open the AutoAuth authorization page"),
@@ -213,7 +214,7 @@ app.post("/login",async(req,res)=>{
 app.post("/dashboard/logout",logged,async(req,res)=>{const owner=req.session.owner;await log("dashboard_logout",{},owner);req.session.destroy(()=>res.redirect("/"));});
 
 require("./dashboard")({app,express,pool,client,esc,log,logged,verifyOrigin,displayActor,displayDetail,ActivityType,
-  core:{OWNER_IDS,isExpired,addUserToGuild,addAllToGuild,kickFromGuild,optOutUser,sendDmTo,connectDiscord,discordState}});
+  core:{OWNER_IDS,isExpired,addUserToGuild,addAllToGuild,kickFromGuild,optOutUser,sendDmTo,connectDiscord,discordState,shutdownBot}});
 
 // ---------- Discord events ----------
 client.once("ready",()=>console.log(`Discord bot logged in as ${client.user.tag}`));

@@ -61,17 +61,17 @@ module.exports = function mountAuth(app, ctx) {
   }
 
   // ---- captcha ----
-  const CH = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  const CH = "ACDEFHJKMNPRTUVWXY34679"; // no look-alike characters
   const rnd = (a, b) => a + (crypto.randomInt(0, 10000) / 10000) * (b - a);
   function captchaSvg(text) {
-    const col = () => `rgb(${Math.floor(rnd(20, 120))},${Math.floor(rnd(20, 120))},${Math.floor(rnd(20, 120))})`;
+    const col = () => `rgb(${Math.floor(rnd(10, 80))},${Math.floor(rnd(10, 80))},${Math.floor(rnd(10, 80))})`;
     let s = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="64" viewBox="0 0 200 64" role="img" aria-label="Captcha image"><rect width="200" height="64" rx="8" fill="#f3f4f6"/>`;
-    for (let i = 0; i < 5; i++) s += `<path d="M${rnd(0, 20).toFixed(1)} ${rnd(5, 59).toFixed(1)} C ${rnd(50, 90).toFixed(1)} ${rnd(0, 64).toFixed(1)}, ${rnd(110, 150).toFixed(1)} ${rnd(0, 64).toFixed(1)}, ${rnd(180, 200).toFixed(1)} ${rnd(5, 59).toFixed(1)}" stroke="${col()}" stroke-width="1.4" fill="none" opacity=".65"/>`;
+    for (let i = 0; i < 3; i++) s += `<path d="M${rnd(0, 20).toFixed(1)} ${rnd(5, 59).toFixed(1)} C ${rnd(50, 90).toFixed(1)} ${rnd(0, 64).toFixed(1)}, ${rnd(110, 150).toFixed(1)} ${rnd(0, 64).toFixed(1)}, ${rnd(180, 200).toFixed(1)} ${rnd(5, 59).toFixed(1)}" stroke="${col()}" stroke-width="1.4" fill="none" opacity=".65"/>`;
     [...text].forEach((ch, i) => {
       const x = 22 + i * 32;
-      s += `<text x="${x}" y="${rnd(38, 48).toFixed(1)}" font-family="monospace" font-size="${rnd(30, 36).toFixed(1)}" font-weight="700" fill="${col()}" transform="rotate(${rnd(-22, 22).toFixed(1)} ${x} 40)">${ch}</text>`;
+      s += `<text x="${x}" y="${rnd(38, 48).toFixed(1)}" font-family="monospace" font-size="${rnd(34, 38).toFixed(1)}" font-weight="700" fill="${col()}" transform="rotate(${rnd(-9, 9).toFixed(1)} ${x} 40)">${ch}</text>`;
     });
-    for (let i = 0; i < 30; i++) s += `<circle cx="${rnd(0, 200).toFixed(1)}" cy="${rnd(0, 64).toFixed(1)}" r="${rnd(0.6, 1.4).toFixed(1)}" fill="${col()}" opacity=".7"/>`;
+    for (let i = 0; i < 12; i++) s += `<circle cx="${rnd(0, 200).toFixed(1)}" cy="${rnd(0, 64).toFixed(1)}" r="${rnd(0.6, 1.4).toFixed(1)}" fill="${col()}" opacity=".7"/>`;
     return s + "</svg>";
   }
   function newCaptcha() {
@@ -114,7 +114,7 @@ ${err}
 <input type="hidden" name="mode" id="ag-mode">
 <label class="chk"><input type="checkbox" name="agree" value="yes" id="ag-chk" required><span>I have read and agree to the <a href="/terms-of-service" target="_blank">Terms of Service</a> and <a href="/privacy-policy" target="_blank">Privacy Policy</a>, and I consent to the above.</span></label>
 <p style="margin:12px 0 4px"><b>Quick check</b>: type the characters you see.</p>
-<div class="capbox"><div id="cap-img"></div><input name="answer" id="cap-ans" autocomplete="off" maxlength="8" required aria-label="Captcha answer"><button type="button" class="linkbtn" onclick="loadCaptcha()">New image</button></div>
+<div class="capbox"><div id="cap-img"></div><input name="answer" id="cap-ans" autocomplete="off" maxlength="8" required aria-label="Captcha answer" autocapitalize="characters" spellcheck="false" placeholder="Type the 5 characters"><button type="button" class="linkbtn" onclick="loadCaptcha()">New image</button></div>
 <input type="hidden" name="token" id="cap-token">
 <div class="btns"><button class="btn green" type="submit">I agree, continue to Discord</button><button type="button" class="btn gray" onclick="closeDlg('agree')">Cancel</button></div>
 </form></dialog>
@@ -125,21 +125,21 @@ var MODES={
  all:{t:'Allow server joins and direct messages',l:['AutoAuth stores your Discord username and ID, and encrypted access tokens.','Server administrators and the AutoAuth owners can add you to servers where AutoAuth is installed, and the owners can remove you from them.','AutoAuth is installed to your Discord account, and the owners can send you direct messages, which may include attachments.']}
 };
 var COMMON='You can opt out at any time with /optout in Discord. Your authorization stays active until you opt out, unless the owners set an expiry.';
-async function loadCaptcha(){var i=document.getElementById('cap-img');i.textContent='Loading…';try{var r=await fetch('/auth/captcha',{cache:'no-store'});var j=await r.json();i.innerHTML=j.svg;document.getElementById('cap-token').value=j.token;document.getElementById('cap-ans').value='';}catch(e){i.textContent='Could not load the captcha. Reload the page.';}}
+async function loadCaptcha(){var i=document.getElementById('cap-img');i.textContent='Loading…';try{var r=await fetch('/auth/captcha',{cache:'no-store'});var j=await r.json();if(!r.ok||!j.svg){i.textContent=r.status===429?'Too many captcha requests. Wait a minute, then press New image.':'Could not load the captcha. Press New image.';document.getElementById('cap-token').value='';return;}i.innerHTML=j.svg;clearTimeout(window.capT);window.capT=setTimeout(loadCaptcha,4*60*1000);document.getElementById('cap-token').value=j.token;document.getElementById('cap-ans').value='';}catch(e){i.textContent='Could not load the captcha. Reload the page.';}}
 function openAgree(m){var d=MODES[m];if(!d)return;document.getElementById('ag-title').textContent=d.t;var ul=document.getElementById('ag-list');ul.innerHTML='';d.l.concat([COMMON]).forEach(function(x){var li=document.createElement('li');li.textContent=x;ul.appendChild(li);});document.getElementById('ag-mode').value=m;document.getElementById('ag-chk').checked=false;loadCaptcha();openDlg('agree');}
 ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${JSON.stringify(reopen)});});` : ""}
 </script>`, "auth"));
   });
 
   app.get("/auth/captcha", (req, res) => {
-    if (limited("cap:" + (req.ip || "?"), 40, 10 * 60 * 1000)) return res.status(429).json({ error: "rate" });
+    if (limited("cap:" + (req.ip || "?"), 150, 10 * 60 * 1000)) return res.status(429).json({ error: "rate" });
     res.set("Cache-Control", "no-store").json(newCaptcha());
   });
 
   app.post("/auth/start", verifyOrigin, async (req, res) => {
     const ip = req.ip || "?", body = req.body || {}, mode = String(body.mode || "");
     if (!MODES[mode]) return res.redirect(303, "/auth");
-    if (limited("start:" + ip, 12, 10 * 60 * 1000)) return res.redirect(303, `/auth?error=rate&mode=${mode}`);
+    if (limited("start:" + ip, 40, 10 * 60 * 1000)) return res.redirect(303, `/auth?error=rate&mode=${mode}`);
     if (body.agree !== "yes") return res.redirect(303, `/auth?error=agree&mode=${mode}`);
     if (!checkCaptcha(body.token, body.answer)) return res.redirect(303, `/auth?error=captcha&mode=${mode}`);
     await log("auth_flow_started", { mode });
