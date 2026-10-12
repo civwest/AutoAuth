@@ -37,10 +37,14 @@ module.exports = function mountAuth(app, ctx) {
     const p = `${MODES[mode].code}.${crypto.randomBytes(16).toString("hex")}.${Date.now() + 60 * 60 * 1000}`;
     return `${p}.${hmac("state:" + p)}`;
   }
+  let lastReason = "";
   function consumeState(st) {
+    lastReason = "";
     const [c, n, exp, sig] = String(st || "").split(".");
-    if (!c || !n || !exp || !sig || !BY_CODE[c]) return null;
-    if (!equal(sig, hmac(`state:${c}.${n}.${exp}`)) || !(Number(exp) > Date.now()) || used.has("s" + n)) return null;
+    if (!c || !n || !exp || !sig || !BY_CODE[c]) { lastReason = "state missing or malformed"; return null; }
+    if (!equal(sig, hmac(`state:${c}.${n}.${exp}`))) { lastReason = "state signature mismatch (SESSION_SECRET changed or link altered)"; return null; }
+    if (!(Number(exp) > Date.now())) { lastReason = "state expired"; return null; }
+    if (used.has("s" + n)) { lastReason = "state already used (page reloaded or opened twice)"; return null; }
     used.set("s" + n, Number(exp));
     return BY_CODE[c];
   }
@@ -178,15 +182,18 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
     const { code, error } = req.query;
     const cookieState = String(req.headers.cookie || "").split(/;\s*/).map((c) => c.split("=")).find((c) => c[0] === "aa_state");
     const state = typeof req.query.state === "string" ? req.query.state : (cookieState ? decodeURIComponent(cookieState[1] || "") : "");
-    const mode = state && typeof code === "string" && code ? consumeState(state) : null;
+    let mode = null, why = "";
+    if (!(typeof code === "string" && code)) why = "Discord did not return a code";
+    else if (!state) why = "Discord did not return the state";
+    else { mode = consumeState(state); why = lastReason; }
     res.clearCookie("aa_state", { path: "/oauth" });
     if (error) {
       await log("oauth_denied", { error: String(error) });
       return res.status(400).send(site.page("Authorization cancelled", `<h1>Authorization cancelled</h1><p>You did not approve AutoAuth, so nothing was saved.</p>${retry}`, "auth"));
     }
     if (!mode || typeof code !== "string" || !code) {
-      await log("oauth_invalid_state", { has_code: !!code, has_state: typeof req.query.state === "string", has_cookie: !!cookieState, keys: Object.keys(req.query).join(",").slice(0, 100) });
-      return res.status(400).send(site.page("Start from the website", `<h1>Please start from the website</h1><p>For security, authorization has to be started from the <a href="/auth">Authorization page</a>, where you read the details and complete a quick check. This link is invalid, expired, or was already used.</p>${retry}`, "auth"));
+      await log("oauth_invalid_state", { has_code: !!code, has_state: typeof req.query.state === "string", has_cookie: !!cookieState, reason: why, keys: Object.keys(req.query).join(",").slice(0, 100) });
+      return res.status(400).send(site.page("Start from the website", `<h1>Please start from the website</h1><p>For security, authorization has to be started from the <a href="/auth">Authorization page</a>, where you read the details and complete a quick check. This link is invalid, expired, or was already used.</p><p class="muted" style="font-size:12px">Reason: ${why.replace(/[<>&"']/g, "")}.</p>${retry}`, "auth"));
     }
     try {
       const r = await fetch("https://discord.com/api/v10/oauth2/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: process.env.CLIENT_ID, client_secret: process.env.CLIENT_SECRET, grant_type: "authorization_code", code, redirect_uri: process.env.REDIRECT_URI }) });
