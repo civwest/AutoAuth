@@ -6,22 +6,15 @@ See [UPDATES.md](UPDATES.md) for a description of every feature and recent chang
 
 ---
 
-## 1. Before you deploy: what to change in the files
+## 1. Nothing personal is hard-coded
 
-Everything personal to the original owner is listed here. Edit these before pushing to GitHub.
+No IDs, names, links or invite URLs live in the code. Everything personal comes from Render environment variables (section 3), so the files can stay public and be used as they are. The only files you may want to swap are the images:
 
-| File | Where | What to change |
-|---|---|---|
-| `index.js` | `DISCORD_OWNER_LABELS` (near the top, ~line 33) | Replace the two Discord **user IDs** and names with your own owners. These IDs are the owners that kick-all skips and that show by name in Logs. Add or remove lines as needed. |
-| `site.js` | `LINKS` object (top of file, ~line 8) | `docs` = your GitHub repo URL (the Documentation tab opens it), plus your own `tiktok`, `youtube`, `x`, `twitch` and `discord` invite links used in the footer. |
-| `site.js` | `IMAGES` object (~line 17) | Fallback Discord CDN image links. Safe to leave; they are only used if `public/bg.webp` or `public/icon.webp` is missing. |
-| `public/bg.webp` | file | Replace with your own background photo (same file name). |
-| `public/icon.webp` | file | Replace with your own site icon / favicon (same file name). |
-| `site.js` | privacy policy and TOS text (search for "civwest") | The legal text says the project is "run by civwest". Change the name and contact details to yours. |
-| `site.js` | `GOOGLE_VERIFICATION_FILE` default, `google955a81d5fc1c3942.html` (~line 275) | Only if you use Google Search Console. Better: set the `GOOGLE_VERIFICATION_FILE` environment variable (see below) instead of editing the file. |
-| `dashboard.js` | the "Add bot to server" link in the sidebar (~line 97) | Replace `client_id=1558725033579249816` with **your** Application ID. `permissions=8` is Administrator, which kicking requires. |
-| `auth.js` | none | Auth links are built from `CLIENT_ID` and `REDIRECT_URI`; nothing to edit. |
-| `env.example` | all values | Reference only. Never commit real values. Set them in Render. |
+| File | What to change |
+|---|---|
+| `public/bg.webp` | Replace with your own site background photo (same file name). |
+| `public/icon.webp` | Replace with your own site icon / favicon (same file name). |
+| `env.example` | Reference list of variables only. Never put real values in it. |
 
 ## 2. Discord Developer Portal (https://discord.com/developers/applications)
 
@@ -55,8 +48,14 @@ Everything personal to the original owner is listed here. Edit these before push
 | `SESSION_SECRET` | Any long random string (also signs auth links and captchas). Changing it invalidates in-flight sign-ins. |
 | `DASHBOARD_OWNER1_USER` / `DASHBOARD_OWNER2_USER` | Dashboard usernames you choose. |
 | `DASHBOARD_OWNER1_PASSWORD_HASH` / `DASHBOARD_OWNER2_PASSWORD_HASH` | scrypt hash in the form `scrypt$<saltHex>$<hashHex>`. See "Dashboard passwords and hashes" below. |
+| `OWNER1_DISCORD_ID` / `OWNER2_DISCORD_ID` | Discord user IDs of the two owners (Discord > Settings > Advanced > Developer Mode, then right-click your profile > Copy User ID). Kick-all skips these users and Logs shows them by name. |
+| `OWNER1_NAME` / `OWNER2_NAME` | Display names for those owners in Logs. |
+| `SITE_OPERATOR` | Name shown in the legal pages and footer as the person running the site (e.g. `Jane Doe`). Defaults to "the site owner". |
+| `LINK_DOCS` | URL opened by the Documentation tab (e.g. your GitHub repo). Hidden if unset. |
+| `LINK_TIKTOK`, `LINK_YOUTUBE`, `LINK_X`, `LINK_TWITCH`, `LINK_DISCORD` | Footer "Follow the creator" links (`LINK_DISCORD` = your server invite). Each icon is hidden if unset. |
 | `DATABASE_SSL` | Optional. Set to `disable` only for a local database. |
-| `GOOGLE_VERIFICATION_FILE` | Optional. The name of Google's verification file (e.g. `google1234abcd.html`); the site serves it at that path. |
+| `DISCORD_DOMAIN_VERIFICATION` | Optional. The value Discord shows when you add your domain to your account (looks like `dh=...`). The site serves it at `/.well-known/discord`. |
+| `GOOGLE_VERIFICATION_FILE` | Optional (not needed if you verified by DNS). The name of Google's verification file (e.g. `google1234abcd.html`); the site serves it at that path. |
 | `GOOGLE_SITE_VERIFICATION` | Optional. The meta-tag content value, as an alternative to the file. |
 
 **Dashboard passwords and hashes.** Each owner needs a password and a matching password hash. You type the password to log in; Render only stores the hash. The easiest way: ask your favorite AI (ChatGPT, Claude, Gemini, etc.) for **2 random passwords and their password hashes** in this format: `scrypt$<saltHex>$<hashHex>` (scrypt, N=16384, r=8, p=1, 32-byte key). Save the passwords somewhere safe, and put each hash into `DASHBOARD_OWNER1_PASSWORD_HASH` and `DASHBOARD_OWNER2_PASSWORD_HASH` in Render.
@@ -84,7 +83,10 @@ Keep real passwords, tokens and hashes out of GitHub.
 | `/auth` | Authorization page: server joins, DMs, or both, each with an agreement and captcha |
 | `/optout` | Self-service opt-out (Discord sign-in, then choose server / DM / everything) |
 | `/terms-of-service`, `/privacy-policy` | Legal pages (`/tos` redirects) |
-| `/login`, `/dashboard` | Owner dashboard: Bot Control, Database, DM Users, Logs |
+| `/login`, `/dashboard` | Owner dashboard: Bot Control, Users, Servers, DM Users, Logs |
+| `/channels/@me`, `/channels/@me/<id>` | Owner-only private chat (no Discord connection needed). Messages are kept in memory only and cleared when the chat is closed. |
+| `/users/profile`, `/users/profile/edit` | Owner profiles (picture, name, pronouns, status, about, time zone, links, colour) |
+| `/.well-known/discord` | Discord domain verification (set `DISCORD_DOMAIN_VERIFICATION`) |
 | `/health` | Plain health check |
 
 ## 6. Commands

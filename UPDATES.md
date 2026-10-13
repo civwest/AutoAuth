@@ -69,3 +69,17 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 - Captcha made easier to read: no look-alike characters (0/O, 1/I, 5/S, 2/Z, 8/B, 6/G removed), less rotation and noise, bigger text, not case sensitive.
 - Dashboard: **Shut down bot** (disconnects the Discord bot and stops auto-reconnect; the site and dashboard stay up; **Start bot** brings it back) and **Restart service** (exits the process so Render starts it again). A full stop of the Render service itself is done from Render (Suspend).
 - Bot reconnect: the Discord client is now created fresh on every connect/start. A destroyed discord.js client could not log in again, which is why **Start bot** failed after **Shut down bot**. A stable proxy keeps the dashboard and site pointed at the current client. Reconnecting needs nothing from startup: only `BOT_TOKEN` and `CLIENT_ID`.
+
+## v1.3.4
+- Dashboard offline mode: when the bot is disconnected, Quick actions, Discord presence, Servers and the DM Users tab are greyed out; clicking them opens a popup with a **Start the bot** button.
+- All personal values moved to environment variables (owner IDs and names, operator name, social and docs links, invite link uses `CLIENT_ID`); nothing sensitive remains in the code. See the README variable table.
+
+## v1.3.5
+- Dashboard: the offline popup is gone from the sidebar. When the bot is disconnected, Quick actions, Discord presence, Servers and the DM Users fields are greyed out and each shows an in-box message with a **Start the bot** button. The sidebar always works.
+- **Database** renamed **Users** (`/dashboard/users`; old URLs redirect). **Servers** is now its own tab (`/dashboard/servers`).
+- Button results (add, remove, expiry, opt-out, DM and so on) now appear in a popup instead of a banner. DM sending only lists failures, with usernames, when something failed.
+- **Owner messaging** at `/channels/@me` and `/channels/@me/<id>`: a Discord-style DM between the two owners. The conversation id is created once and never changes. Messages are held in memory only and cleared on **Close chat** or when both owners have left; a transcript can be downloaded first. "Signed in as" in the sidebar opens it. No Discord connection is needed.
+- **Profiles** at `/users/profile` (view) and `/users/profile/edit`: profile picture, display name, pronouns, status, about, time zone, links and profile colour.
+- Logging in now remembers where you were going (`/login?next=...`, same-site owner paths only) and sends you back there.
+- `/.well-known/discord` serves `DISCORD_DOMAIN_VERIFICATION` for Discord's domain verification.
+- New database tables created automatically: `owner_profiles`, `owner_dms`.

@@ -105,7 +105,7 @@ ${err}
 <button type="button" class="authopt" onclick="openAgree('all')"><b>Allow Both</b><span>Server joins and direct messages in one approval.</span></button>
 </div>
 <noscript><p class="banner">JavaScript is required for the captcha on this page.</p></noscript>
-<p class="updated">Already authorized? Opt out any time on the <a href="/optout">opt-out page</a> or with <code>/optout</code> in Discord to opt out of servers, DMs or everything. AutoAuth is an independent project run by civwest and is not affiliated with Discord Inc.</p>
+<p class="updated">Already authorized? Opt out any time on the <a href="/optout">opt-out page</a> or with <code>/optout</code> in Discord to opt out of servers, DMs or everything. AutoAuth is an independent project run by ${process.env.SITE_OPERATOR || "the site owner"} and is not affiliated with Discord Inc.</p>
 <dialog class="dlg" id="agree">
 <form method="post" action="/auth/start" id="agree-form">
 <h2 id="ag-title"></h2>

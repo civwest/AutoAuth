@@ -40,10 +40,9 @@ function dec(s) { const [i,t,b]=s.split("."), d=crypto.createDecipheriv("aes-256
 function equal(a,b) { const x=Buffer.from(String(a)), y=Buffer.from(String(b)); return x.length===y.length && crypto.timingSafeEqual(x,y); }
 function verify(pw, h) { try { const [alg,salt,expected]=h.split("$"); if(alg!=="scrypt") return false; const got=crypto.scryptSync(pw,Buffer.from(salt,"hex"),32,{N:16384,r:8,p:1}).toString("hex"); return equal(got,expected); } catch { return false; } }
 function esc(s) { return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
-const DISCORD_OWNER_LABELS = {
- "1426813617394946068": "Civwest",
- "1481562091520262236": "Jacob"
-};
+// Owner Discord IDs come from Render variables (OWNER1_DISCORD_ID / OWNER1_NAME, OWNER2_DISCORD_ID / OWNER2_NAME).
+const DISCORD_OWNER_LABELS = {};
+for (const n of ["1","2"]) { const id=(process.env[`OWNER${n}_DISCORD_ID`]||"").trim(); if(/^\d{17,20}$/.test(id)) DISCORD_OWNER_LABELS[id]=process.env[`OWNER${n}_NAME`]||`Owner ${n}`; }
 const OWNER_IDS = Object.keys(DISCORD_OWNER_LABELS);
 function displayActor(actor) {
  const value = String(actor ?? "system");
@@ -64,15 +63,20 @@ async function schema() {
  ALTER TABLE authorized_users ADD COLUMN IF NOT EXISTS auth_expires_at TIMESTAMPTZ;
  CREATE TABLE IF NOT EXISTS audit_logs(id BIGSERIAL PRIMARY KEY,event_type TEXT NOT NULL,actor TEXT NOT NULL DEFAULT 'system',detail JSONB NOT NULL DEFAULT '{}'::jsonb,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  CREATE TABLE IF NOT EXISTS command_stats(command_name TEXT PRIMARY KEY,uses BIGINT NOT NULL DEFAULT 0);
- INSERT INTO command_stats(command_name,uses) VALUES('addusers',0) ON CONFLICT(command_name) DO NOTHING;`);
+ INSERT INTO command_stats(command_name,uses) VALUES('addusers',0) ON CONFLICT(command_name) DO NOTHING;
+ CREATE TABLE IF NOT EXISTS owner_profiles(owner_key TEXT PRIMARY KEY, display_name TEXT, pronouns TEXT, bio TEXT, status_emoji TEXT, status_text TEXT, accent TEXT, timezone TEXT, links TEXT, avatar BYTEA, avatar_type TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ CREATE TABLE IF NOT EXISTS owner_dms(id TEXT PRIMARY KEY, owner_a TEXT NOT NULL, owner_b TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(owner_a, owner_b));`);
 }
 function deviceFingerprint(req) {
  return crypto.createHash("sha256").update(String(req.get("user-agent")||"unknown")).digest("hex");
 }
+// Only same-site paths inside the owner areas may be used as a post-login destination.
+function safeNext(v){ v=String(v||""); return /^\/(dashboard|channels\/@me|users\/profile)(?:[\/?#][^\\\s]*)?$/.test(v)&&!v.startsWith("//") ? v : ""; }
+function nextParam(req,sep="?"){ const n=req.method==="GET"?safeNext(req.originalUrl):""; return n?`${sep}next=${encodeURIComponent(n)}`:""; }
 function logged(req,res,next) {
- if(!req.session.owner) return res.redirect("/login");
+ if(!req.session.owner) return res.redirect("/login"+nextParam(req));
  if(!req.session.deviceFingerprint || !equal(req.session.deviceFingerprint,deviceFingerprint(req))) {
-   return req.session.destroy(()=>res.redirect("/login?expired=1"));
+   return req.session.destroy(()=>res.redirect("/login?expired=1"+nextParam(req,"&")));
  }
  next();
 }
@@ -206,20 +210,22 @@ async function register() {
 // ---------- website + authorization + dashboard ----------
 const site=require("./site")(app,client,getStats); // public site: /, /info, /terms-of-service, /privacy-policy
 app.get("/health",(_,res)=>res.send("ok"));
+// Discord domain verification (Discord > Settings > Domains asks you to serve this value at /.well-known/discord)
+app.get("/.well-known/discord",(req,res)=>{ const v=(process.env.DISCORD_DOMAIN_VERIFICATION||"").trim(); if(!/^dh=[0-9a-f]{20,64}$/i.test(v)) return res.status(404).type("text/plain").send("Not found"); res.type("text/plain").send(v); });
 require("./auth")(app,{site,pool,enc,log,equal,verifyOrigin,optOutUser}); // /auth, /auth/captcha, /auth/start, /oauth/callback
 
 app.get("/dashboard/login",(req,res)=>res.redirect(302,"/login"));
 app.get("/login",(req,res)=>{
- if(req.session.owner)return res.redirect("/dashboard");
- res.send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AutoAuth Login</title><style>body{font:16px system-ui;background:#0d1117;color:#e6edf3}.box{max-width:420px;margin:12vh auto;padding:28px;background:#161b22;border:1px solid #30363d;border-radius:14px}input,button{width:100%;padding:12px;margin:8px 0 14px;box-sizing:border-box;border-radius:8px;border:1px solid #30363d}input{background:#0d1117;color:white}button{background:#7289da;color:white;border:0;cursor:pointer}</style><div class="box"><h1>AutoAuth</h1><p>Owner dashboard login</p>${req.query.error?"<p>Login failed. Check username and password.</p>":""}<form method="post"><label>Username</label><input name="username" autocomplete="username" required><label>Password</label><input type="password" name="password" autocomplete="current-password" required><button>Sign in</button></form></div>`);
+ if(req.session.owner)return res.redirect(safeNext(req.query.next)||"/dashboard");
+ res.send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AutoAuth Login</title><style>body{font:16px system-ui;background:#0d1117;color:#e6edf3}.box{max-width:420px;margin:12vh auto;padding:28px;background:#161b22;border:1px solid #30363d;border-radius:14px}input,button{width:100%;padding:12px;margin:8px 0 14px;box-sizing:border-box;border-radius:8px;border:1px solid #30363d}input{background:#0d1117;color:white}button{background:#7289da;color:white;border:0;cursor:pointer}</style><div class="box"><h1>AutoAuth</h1><p>Owner dashboard login</p>${req.query.error?"<p>Login failed. Check username and password.</p>":""}<form method="post"><input type="hidden" name="next" value="${esc(safeNext(req.query.next))}"><label>Username</label><input name="username" autocomplete="username" required><label>Password</label><input type="password" name="password" autocomplete="current-password" required><button>Sign in</button></form></div>`);
 });
 app.post("/login",async(req,res)=>{
  const ip=req.ip||"unknown", a=attempts.get(ip)||{n:0,until:0};
  if(a.until>Date.now())return res.status(429).send("Too many login attempts. Try again later.");
  const user=String(req.body.username||""),pw=String(req.body.password||"");
  const owner=owners.find(o=>equal(o.user,user)&&verify(pw,o.hash));
- if(!owner){a.n++;if(a.n>=8){a.n=0;a.until=Date.now()+15*60*1000;}attempts.set(ip,a);await log("dashboard_login_failed",{username:user.slice(0,80),ip});return res.redirect(303,"/login?error=1");}
- attempts.delete(ip);req.session.regenerate(async err=>{if(err)return res.status(500).send("Session error");req.session.owner=owner.user;req.session.deviceFingerprint=deviceFingerprint(req);req.session.createdAt=Date.now();await log("dashboard_login_success",{ip,session_ttl_minutes:120,device_bound:true},owner.user);res.redirect(303,"/dashboard");});
+ if(!owner){a.n++;if(a.n>=8){a.n=0;a.until=Date.now()+15*60*1000;}attempts.set(ip,a);await log("dashboard_login_failed",{username:user.slice(0,80),ip});return res.redirect(303,"/login?error=1"+(safeNext(req.body.next)?"&next="+encodeURIComponent(safeNext(req.body.next)):""));}
+ attempts.delete(ip);req.session.regenerate(async err=>{if(err)return res.status(500).send("Session error");req.session.owner=owner.user;req.session.deviceFingerprint=deviceFingerprint(req);req.session.createdAt=Date.now();await log("dashboard_login_success",{ip,session_ttl_minutes:120,device_bound:true},owner.user);res.redirect(303,safeNext(req.body.next)||"/dashboard");});
 });
 app.post("/dashboard/logout",logged,async(req,res)=>{const owner=req.session.owner;await log("dashboard_logout",{},owner);req.session.destroy(()=>res.redirect("/"));});
 

@@ -5,21 +5,21 @@ const path = require("node:path");
 const icons = require("./icons");
 
 const SITE = (() => { try { return new URL(process.env.REDIRECT_URI).origin; } catch { return "https://autoauth.cfd"; } })();
+// Everything personal comes from Render environment variables (see README). Unset links are simply hidden.
+const OPERATOR = process.env.SITE_OPERATOR || "the site owner";
 const LINKS = {
-  docs: "https://github.com/civwest/AutoAuth",
-  tiktok: "https://www.tiktok.com/@civwest",
-  youtube: "https://www.youtube.com/@civwes",
-  x: "https://x.com/civwes",
-  twitch: "https://www.twitch.tv/civwest",
-  discord: "https://discord.gg/N7EBbT2U67",
+  docs: process.env.LINK_DOCS || "",
+  tiktok: process.env.LINK_TIKTOK || "",
+  youtube: process.env.LINK_YOUTUBE || "",
+  x: process.env.LINK_X || "",
+  twitch: process.env.LINK_TWITCH || "",
+  discord: process.env.LINK_DISCORD || "",
 };
+// Optional links in running text: shows a link only when the variable is set.
+const ext = (url, label) => (url ? `<a href="${url}" data-ext target="_blank" rel="noopener">${label}</a>` : label);
 
-// Drop bg.webp and icon.webp into ./public to serve them from this site.
-// Until then, the original Discord CDN links are used as a fallback (those links expire).
-const IMAGES = {
-  "bg.webp": "https://cdn.discordapp.com/attachments/1550769562411212852/1550769657529503754/temp_image_1BB73E3C-B6C3-4DB0-B42F-17322250C41A.webp?ex=6acd340a&is=6acbe28a&hm=402729b8df978d817a017cffe758c7a19bc9b45d721f1416ab687e2706645689&",
-  "icon.webp": "https://cdn.discordapp.com/attachments/1550769562411212852/1550769659807014952/temp_image_AFC5DC73-24B4-4D49-A972-EED392BF3D39.webp?ex=6acd340a&is=6acbe28a&hm=34409f97a4bb7fa977dd75be497203defa61357da64e5d7f1e922ac7a17785ec&",
-};
+// Images are served from ./public (bg.webp = background, icon.webp = site icon / favicon).
+const IMAGES = { "bg.webp": true, "icon.webp": true };
 const PUBLIC_DIR = path.join(__dirname, "public");
 
 const svg = (name, label) =>
@@ -109,7 +109,7 @@ ${/^[\w-]{20,100}$/.test(process.env.GOOGLE_SITE_VERIFICATION || "") ? `<meta na
 <div class="bg"></div>
 <header class="nav">
 <div class="grp"><a class="tab login" href="/login">Login</a></div>
-<div class="grp">${nav("/", "Home", "home")}${nav("/info", "Info", "info")}${nav("/auth", "Authorization", "auth")}<a class="tab" href="${LINKS.docs}" data-ext target="_blank" rel="noopener">Documentation</a>
+<div class="grp">${nav("/", "Home", "home")}${nav("/info", "Info", "info")}${nav("/auth", "Authorization", "auth")}${LINKS.docs ? `<a class="tab" href="${LINKS.docs}" data-ext target="_blank" rel="noopener">Documentation</a>` : ""}
 <a href="/" aria-label="AutoAuth home"><img class="logo" src="/assets/icon.webp" alt="AutoAuth"></a></div>
 </header>
 <div class="spacer" style="--gap:${gap}"></div>
@@ -121,7 +121,7 @@ ${/^[\w-]{20,100}$/.test(process.env.GOOGLE_SITE_VERIFICATION || "") ? `<meta na
 <div class="fcol"><h3>About AutoAuth</h3>
 <p>AutoAuth is a Discord bot that lets members link their account once, so server admins can add them to a server without sending invites, and so the owners can send them direct messages if they choose to allow it.</p>
 <p>Your account is saved with encrypted tokens, and you can opt out any time on the <a href="/optout">opt-out page</a> or with <code>/optout</code> in Discord.</p>
-<p style="font-size:13px;color:#9ca3af">AutoAuth is an independent project run by civwest. It is not affiliated with, endorsed by, or sponsored by Discord Inc.</p></div>
+<p style="font-size:13px;color:#9ca3af">AutoAuth is an independent project run by ${OPERATOR}. It is not affiliated with, endorsed by, or sponsored by Discord Inc.</p></div>
 <div class="fcol"><h3>What it can do</h3>
 <ul>
 <li><code>/auth</code> Open the authorization page.</li>
@@ -132,11 +132,11 @@ ${/^[\w-]{20,100}$/.test(process.env.GOOGLE_SITE_VERIFICATION || "") ? `<meta na
 <div class="foot">
 <h3>Follow the creator</h3>
 <div class="icons">
-<a href="${LINKS.tiktok}" target="_blank" rel="noopener" title="TikTok" aria-label="TikTok">${svg("tiktok", "TikTok")}</a>
-<a href="${LINKS.youtube}" target="_blank" rel="noopener" title="YouTube" aria-label="YouTube">${svg("youtube", "YouTube")}</a>
-<a href="${LINKS.x}" target="_blank" rel="noopener" title="X" aria-label="X">${svg("x", "X")}</a>
-<a href="${LINKS.twitch}" target="_blank" rel="noopener" title="Twitch" aria-label="Twitch">${svg("twitch", "Twitch")}</a>
-<a href="${LINKS.discord}" target="_blank" rel="noopener" title="Join the Discord" aria-label="Join the Discord">${svg("discord", "Join the Discord")}</a>
+${LINKS.tiktok ? `<a href="${LINKS.tiktok}" target="_blank" rel="noopener" title="TikTok" aria-label="TikTok">${svg("tiktok", "TikTok")}</a>` : ""}
+${LINKS.youtube ? `<a href="${LINKS.youtube}" target="_blank" rel="noopener" title="YouTube" aria-label="YouTube">${svg("youtube", "YouTube")}</a>` : ""}
+${LINKS.x ? `<a href="${LINKS.x}" target="_blank" rel="noopener" title="X" aria-label="X">${svg("x", "X")}</a>` : ""}
+${LINKS.twitch ? `<a href="${LINKS.twitch}" target="_blank" rel="noopener" title="Twitch" aria-label="Twitch">${svg("twitch", "Twitch")}</a>` : ""}
+${LINKS.discord ? `<a href="${LINKS.discord}" target="_blank" rel="noopener" title="Join the Discord" aria-label="Join the Discord">${svg("discord", "Join the Discord")}</a>` : ""}
 </div>
 <div class="legal"><a href="/terms-of-service">Terms of Service</a><a href="/privacy-policy">Privacy Policy</a></div>
 </div></footer><script>${CLIENT_JS}</script></body></html>`;
@@ -175,14 +175,14 @@ const infoBody = `
 <details><summary>Can I be removed from a server?</summary><p>Yes. The owners can remove members they added, using the bot, and server administrators have their own tools.</p></details>
 <details><summary>Why did a DM not arrive?</summary><p>Discord only lets a bot message you if your privacy settings allow it. Check your DM settings for the server you share with the bot.</p></details>
 <h2>Documentation</h2>
-<p>Setup instructions and source code are on <a href="${LINKS.docs}" data-ext target="_blank" rel="noopener">GitHub</a>.</p>`;
+<p>Setup instructions and source code are on ${ext(LINKS.docs, "GitHub")}.</p>`;
 
 const UPDATED = "October 12, 2026";
 
 const privacyBody = `
 <h1>Privacy Policy</h1>
 <p class="updated">Last updated: ${UPDATED}</p>
-<p>This policy explains what AutoAuth (“the bot”, “we”) collects, why, and the choices you have. AutoAuth is a Discord bot and website operated by civwest at ${SITE}.</p>
+<p>This policy explains what AutoAuth (“the bot”, “we”) collects, why, and the choices you have. AutoAuth is a Discord bot and website operated by ${OPERATOR} at ${SITE}.</p>
 
 <h2>1. What we collect</h2>
 <p>When you complete the <a href="/auth">Authorization</a> flow and approve the Discord screen, we receive and store:</p>
@@ -217,7 +217,7 @@ const privacyBody = `
 <ul>
 <li><b>Opt out:</b> use the <a href="/optout">opt-out page</a> or run <code>/optout</code> in Discord and choose <b>server joins</b>, <b>direct messages</b>, or <b>everything</b>. Opting out of one keeps your record only for the other. Opting out of everything revokes your authorization with Discord and deletes your stored record and the audit log entries that contain your user ID.</li>
 <li><b>Revoke access:</b> in Discord, go to User Settings → Authorized Apps and remove AutoAuth. The stored tokens then stop working.</li>
-<li><b>Ask us:</b> you can also ask in our <a href="${LINKS.discord}" data-ext target="_blank" rel="noopener">Discord server</a>. Deleting your record does not remove you from servers you already joined; leave those from Discord.</li>
+<li><b>Ask us:</b> you can also ask in our ${ext(LINKS.discord, "Discord server")}. Deleting your record does not remove you from servers you already joined; leave those from Discord.</li>
 </ul>
 
 <h2>7. Security</h2>
@@ -230,7 +230,7 @@ const privacyBody = `
 <p>We may update this policy and will change the date above when we do.</p>
 
 <h2>10. Contact</h2>
-<p>Questions or requests: join the <a href="${LINKS.discord}" data-ext target="_blank" rel="noopener">Discord server</a>.</p>`;
+<p>Questions or requests: join the ${ext(LINKS.discord, "Discord server")}.</p>`;
 
 const tosBody = `
 <h1>Terms of Service</h1>
@@ -257,22 +257,22 @@ const tosBody = `
 <h2>8. Changes</h2>
 <p>We may update these terms and will change the date above when we do.</p>
 <h2>9. Contact</h2>
-<p>Questions: join the <a href="${LINKS.discord}" data-ext target="_blank" rel="noopener">Discord server</a>.</p>`;
+<p>Questions: join the ${ext(LINKS.discord, "Discord server")}.</p>`;
 
 module.exports = function mountSite(app, client, getStats) {
   const page = (title, body, active) => layout({ title: title + " | AutoAuth", active, gap: "20vh", body });
 
-  // Images: serve local copy from ./public when present, otherwise fall back to the Discord CDN link.
+  // Images are served from ./public.
   app.get("/assets/:file", (req, res) => {
     const f = req.params.file;
     if (!Object.hasOwn(IMAGES, f)) return res.status(404).end();
     const local = path.join(PUBLIC_DIR, f);
-    if (fs.existsSync(local)) return res.type("image/webp").set("Cache-Control", "public, max-age=86400").sendFile(local);
-    return res.redirect(302, IMAGES[f]);
+    if (!fs.existsSync(local)) return res.status(404).end();
+    return res.type("image/webp").set("Cache-Control", "public, max-age=86400").sendFile(local);
   });
-  // Google Search Console HTML-file verification (name is built in; override with GOOGLE_VERIFICATION_FILE).
+  // Google Search Console HTML-file verification (only active when GOOGLE_VERIFICATION_FILE is set).
   app.get(/^\/google[0-9a-f]{8,}\.html$/, (req, res) =>
-    req.path.slice(1) === (process.env.GOOGLE_VERIFICATION_FILE || "google955a81d5fc1c3942.html")
+    process.env.GOOGLE_VERIFICATION_FILE && req.path.slice(1) === process.env.GOOGLE_VERIFICATION_FILE
       ? res.type("text/html").send("google-site-verification: " + req.path.slice(1))
       : res.status(404).end());
   app.get("/favicon.ico", (_, res) => res.redirect(301, "/assets/icon.webp"));
