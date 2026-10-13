@@ -12,13 +12,14 @@ const crypto = require("node:crypto");
 const MODES = {
   server: { code: "s", scope: ["guilds.join", "identify"], userInstall: false },
   dm: { code: "d", scope: ["identify", "applications.commands"], userInstall: true },
+  role: { code: "r", scope: ["identify", "role_connections.write"], userInstall: false },
   optout: { code: "o", scope: ["identify"], userInstall: false },
   all: { code: "a", scope: ["identify", "applications.commands", "guilds.join"], userInstall: true },
 };
 const BY_CODE = Object.fromEntries(Object.entries(MODES).map(([k, v]) => [v.code, k]));
 
 module.exports = function mountAuth(app, ctx) {
-  const { site, pool, enc, log, equal, verifyOrigin, optOutUser } = ctx;
+  const { site, pool, enc, log, equal, verifyOrigin, optOutUser, roles } = ctx;
   const secret = process.env.SESSION_SECRET;
   const used = new Map(); // nonce -> expiry (single-use state + captcha tokens)
   const hits = new Map(); // rate limiting
@@ -154,6 +155,11 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
   function makeTicket(uid) { const p = `${uid}.${Date.now() + 10 * 60 * 1000}.${crypto.randomBytes(8).toString("hex")}`; return `${p}.${hmac("optout:" + p)}`; }
   app.get("/optout", (_, res) => res.send(site.page("Opt out", `<h1>Opt out of AutoAuth</h1><p>Sign in with Discord so we know the request is really from you. We only read your username and ID, and the sign-in token is revoked immediately. Then choose to turn off server joins, direct messages, or delete everything.</p>
 <form method="post" action="/optout/start"><button class="btn blue">Continue with Discord</button></form><p class="updated">You can also run <code>/optout</code> in Discord.</p>`, "auth")));
+  // Linked Roles Verification URL: set this in the Discord Developer Portal. Discord sends members here to connect.
+  app.get("/linked-role", (req, res) => {
+    if (limited("role:" + (req.ip || "?"), 40, 10 * 60 * 1000)) return res.status(429).send("Too many attempts. Try again later.");
+    res.set("Cache-Control", "no-store").redirect(302, discordUrlFor("role"));
+  });
   app.post("/optout/start", verifyOrigin, (req, res) => {
     if (limited("optout:" + (req.ip || "?"), 15, 10 * 60 * 1000)) return res.status(429).send("Too many attempts. Try again later.");
     return res.set("Cache-Control", "no-store").redirect(303, discordUrlFor("optout"));
@@ -201,6 +207,13 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
       if (!r.ok) { await log("oauth_exchange_failed", { status: r.status, error: t.error }); return res.status(502).send(site.page("Authorization failed", `<h1>Authorization failed</h1><p>Discord rejected the sign-in. Please try again.</p>${retry}`, "auth")); }
       const ur = await fetch("https://discord.com/api/v10/users/@me", { headers: { Authorization: `Bearer ${t.access_token}` } }), u = await ur.json();
       if (!ur.ok || !u.id) { await log("oauth_user_fetch_failed", { status: ur.status }); return res.status(502).send(site.page("Authorization failed", `<h1>Could not read your account</h1><p>Discord did not return your account details. Please try again.</p>${retry}`, "auth")); }
+      if (mode === "role") {
+        try {
+          const out = await roles.link(u, t);
+          await log("role_connection_linked", { user_id: u.id, authorized: out.authorized, server: out.meta.server_authorized, dm: out.meta.dm_authorized });
+          return res.send(site.page("Linked", `<h1>Connected to Discord</h1><p>Your AutoAuth status was sent to Discord.</p>${out.authorized ? "<p>Discord will now assign roles in servers that use AutoAuth requirements. Return to Discord to see them.</p>" : "<p>You have not authorized AutoAuth yet, so you will not qualify for roles. Visit the <a href='/auth'>Authorization page</a> first, then connect again from Discord.</p>"}`, "auth"));
+        } catch (e) { await log("role_connection_failed", { error: e.message }); return res.status(502).send(site.page("Could not connect", `<h1>Could not connect</h1><p>Discord did not accept the connection. Please try again from Discord.</p>${retry}`, "auth")); }
+      }
       if (mode === "optout") {
         // Identity only: revoke this temporary token straight away, nothing is stored.
         fetch("https://discord.com/api/v10/oauth2/token/revoke", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: process.env.CLIENT_ID, client_secret: process.env.CLIENT_SECRET, token: t.access_token, token_type_hint: "access_token" }) }).catch(() => {});

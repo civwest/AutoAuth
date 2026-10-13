@@ -20,7 +20,7 @@ app.use(session({ name:"autoauth.sid", secret:process.env.SESSION_SECRET, resave
   cookie:{ httpOnly:true, secure:"auto", sameSite:"lax", maxAge:2*60*60*1000 } }));
 // The Discord client is re-created on every (re)connect, because a destroyed discord.js client cannot reliably log in again.
 // `client` is a stable proxy that always points at the current instance, so other modules never hold a dead client.
-let realClient = null, dash = null;
+let realClient = null, dash = null, roles = { syncUser: async()=>{}, unlink: async()=>{} };
 const client = new Proxy({}, { get(_, k) { const v = realClient ? realClient[k] : undefined; return typeof v === "function" ? v.bind(realClient) : v; } });
 function freshClient() {
  const c = new Client({ intents:[GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages], partials:[Partials.Channel, Partials.Message] });
@@ -67,6 +67,7 @@ async function schema() {
  INSERT INTO command_stats(command_name,uses) VALUES('addusers',0) ON CONFLICT(command_name) DO NOTHING;
  CREATE TABLE IF NOT EXISTS bot_dms(id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, username TEXT, avatar_url TEXT, direction TEXT NOT NULL, sender TEXT, content TEXT NOT NULL DEFAULT '', attachments JSONB NOT NULL DEFAULT '[]'::jsonb, mutual BOOLEAN NOT NULL DEFAULT FALSE, authorized BOOLEAN NOT NULL DEFAULT FALSE, is_read BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  ALTER TABLE bot_dms ADD COLUMN IF NOT EXISTS mutual_guild TEXT;
+ CREATE TABLE IF NOT EXISTS role_links(user_id TEXT PRIMARY KEY, username TEXT, access_token_enc TEXT NOT NULL, refresh_token_enc TEXT NOT NULL, expires_at BIGINT NOT NULL, linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  CREATE INDEX IF NOT EXISTS bot_dms_user_idx ON bot_dms(user_id, id);
  CREATE TABLE IF NOT EXISTS owner_profiles(owner_key TEXT PRIMARY KEY, display_name TEXT, pronouns TEXT, bio TEXT, status_emoji TEXT, status_text TEXT, accent TEXT, timezone TEXT, links TEXT, avatar BYTEA, avatar_type TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  CREATE TABLE IF NOT EXISTS owner_dms(id TEXT PRIMARY KEY, owner_a TEXT NOT NULL, owner_b TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(owner_a, owner_b));`);
@@ -143,8 +144,8 @@ async function optOutUser(uid, type="all") {
  if(!row) return {had:false,changed:false,deleted:false};
  const full = type==="all" || (type==="server" && !row.dm_authorized) || (type==="dm" && !row.server_authorized);
  if(!full){
-  if(type==="server"){await pool.query("UPDATE authorized_users SET server_authorized=FALSE WHERE user_id=$1",[uid]);return {had:true,changed:!!row.server_authorized,deleted:false};}
-  await pool.query("UPDATE authorized_users SET dm_authorized=FALSE WHERE user_id=$1",[uid]);return {had:true,changed:!!row.dm_authorized,deleted:false};
+  if(type==="server"){await pool.query("UPDATE authorized_users SET server_authorized=FALSE WHERE user_id=$1",[uid]);roles.syncUser(uid).catch(()=>{});return {had:true,changed:!!row.server_authorized,deleted:false};}
+  await pool.query("UPDATE authorized_users SET dm_authorized=FALSE WHERE user_id=$1",[uid]);roles.syncUser(uid).catch(()=>{});return {had:true,changed:!!row.dm_authorized,deleted:false};
  }
  // Full opt-out: revoke the grant at Discord (best effort), delete the record and related log entries.
  try{
@@ -152,6 +153,7 @@ async function optOutUser(uid, type="all") {
   await fetch("https://discord.com/api/v10/oauth2/token/revoke",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:process.env.CLIENT_ID,client_secret:process.env.CLIENT_SECRET,token:rt,token_type_hint:"refresh_token"})});
  }catch(e){console.warn("Token revoke failed",e.message);}
  await pool.query("DELETE FROM authorized_users WHERE user_id=$1",[uid]);
+ await roles.unlink(uid).catch(()=>{});
  await pool.query("DELETE FROM bot_dms WHERE user_id=$1",[uid]);
  await pool.query("DELETE FROM audit_logs WHERE actor=$1 OR detail->>'user_id'=$1 OR detail->>'target_user_id'=$1",[uid]);
  return {had:true,changed:true,deleted:true};
@@ -217,7 +219,8 @@ const site=require("./site")(app,client,getStats); // public site: /, /info, /te
 app.get("/health",(_,res)=>res.send("ok"));
 // Discord domain verification (Discord > Settings > Domains asks you to serve this value at /.well-known/discord)
 app.get("/.well-known/discord",(req,res)=>{ const v=(process.env.DISCORD_DOMAIN_VERIFICATION||"").trim(); if(!/^dh=[0-9a-f]{20,64}$/i.test(v)) return res.status(404).type("text/plain").send("Not found"); res.type("text/plain").send(v); });
-require("./auth")(app,{site,pool,enc,log,equal,verifyOrigin,optOutUser}); // /auth, /auth/captcha, /auth/start, /oauth/callback
+roles=require("./roles")({pool,enc,dec,log});
+require("./auth")(app,{site,pool,enc,log,equal,verifyOrigin,optOutUser,roles}); // /auth, /auth/captcha, /auth/start, /oauth/callback
 
 app.get("/dashboard/login",(req,res)=>res.redirect(302,"/login"));
 app.get("/login",(req,res)=>{
@@ -234,7 +237,7 @@ app.post("/login",async(req,res)=>{
 });
 app.post("/dashboard/logout",logged,async(req,res)=>{const owner=req.session.owner;await log("dashboard_logout",{},owner);req.session.destroy(()=>res.redirect("/"));});
 
-dash=require("./dashboard")({app,express,pool,client,esc,log,logged,verifyOrigin,displayActor,displayDetail,ActivityType,
+dash=require("./dashboard")({roles,app,express,pool,client,esc,log,logged,verifyOrigin,displayActor,displayDetail,ActivityType,
   core:{OWNER_IDS,isExpired,addUserToGuild,addAllToGuild,kickFromGuild,optOutUser,sendDmTo,connectDiscord,discordState,shutdownBot}});
 
 // ---------- Discord events ----------

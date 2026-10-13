@@ -25,6 +25,8 @@ No IDs, names, links or invite URLs live in the code. Everything personal comes 
 5. **Installation tab:** enable **User Install** (needed for the DM authorization option) and **Guild Install**.
 6. Optionally restrict who can add the bot: untick **Public Bot** on the Bot tab.
 
+**Linked Roles (optional):** in the Developer Portal open **General Information** and set **Linked Roles Verification URL** to `https://YOUR-SITE/linked-role`. Then open the dashboard's **Linked Roles** tab and press **Refresh** once. Server admins add the AutoAuth requirements under Server Settings > Roles > Links.
+
 ## 3. Render setup
 
 1. Create a **PostgreSQL** database on Render. Copy its **Internal Database URL**; this is `DATABASE_URL`.
@@ -88,6 +90,7 @@ Keep real passwords, tokens and hashes out of GitHub.
 | `/channels/<server-id>/<userid>`, `/channels/@dm/<userid>` | Owner view of one DM chat with a person (server id = a server they share with the bot) |
 | `/channels/@me`, `/channels/@me/<id>` | Owner-only private chat (no Discord connection needed). Messages are kept in memory only and cleared when the chat is closed. |
 | `/users/profile`, `/users/profile/edit` | Owner profiles (picture, name, pronouns, status, about, time zone, links, colour) |
+| `/linked-role` | Linked Roles Verification URL (members connect here from Discord) |
 | `/.well-known/discord` | Discord domain verification (set `DISCORD_DOMAIN_VERIFICATION`) |
 | `/health` | Plain health check |
 

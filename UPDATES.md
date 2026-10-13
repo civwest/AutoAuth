@@ -96,3 +96,10 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 - The bot now receives DMs (Discord's non-privileged `DirectMessages` intent; no Developer Portal change). Stored in the new `bot_dms` table; deleted after `DM_RETENTION_DAYS` (default 30), when an owner deletes the conversation, or when the person opts out of everything. The Privacy Policy describes this.
 - Owners can reply to anyone who has messaged the bot, not only people who allowed DMs on the website.
 - DM chat URLs are now `/channels/<mutual-server-id>/<userid>` (the id of a server the person shares with the bot, found when they message it). People with no mutual server use `/channels/@dm/<userid>`. The old `/dashboard/dm/<userid>` URL redirects. New column `bot_dms.mutual_guild` is added automatically.
+
+## v1.3.8
+- **Linked Roles** tab (`/dashboard/roles`), locked behind "Start the bot" while the bot is offline: shows the **Linked Roles Verification URL** (`/linked-role`) with a copy button, setup steps, the linked members, and a **Refresh** button that registers the role requirements with Discord and re-sends every linked member's current status.
+- Roles are assigned by Discord itself ("Linked Roles"): requirements are *Server joins allowed*, *DMs allowed* and *Days authorized*. Members connect through the verification URL (scopes `identify` and `role_connections.write`); tokens are stored encrypted in the new `role_links` table and removed when the member opts out of everything. Opting out of server joins or DMs updates their Discord status automatically.
+- Users tab: the **Add to server** buttons are greyed out while the bot is offline.
+- Privacy Policy updated for Linked Roles.
+- Developer Portal step: set **Linked Roles Verification URL** to `https://YOUR-SITE/linked-role` (General Information).
