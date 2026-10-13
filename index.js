@@ -3,7 +3,7 @@ const crypto = require("node:crypto");
 const express = require("express");
 const session = require("express-session");
 const { Pool } = require("pg");
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits, ActivityType, MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits, ActivityType, MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle, Partials, ChannelType } = require("discord.js");
 
 const required = ["BOT_TOKEN","CLIENT_ID","CLIENT_SECRET","REDIRECT_URI","DATABASE_URL","TOKEN_ENCRYPTION_KEY","SESSION_SECRET","DASHBOARD_OWNER1_USER","DASHBOARD_OWNER1_PASSWORD_HASH","DASHBOARD_OWNER2_USER","DASHBOARD_OWNER2_PASSWORD_HASH"];
 for (const k of required) if (!process.env[k]) { console.error("Missing Render environment variable:", k); process.exit(1); }
@@ -20,13 +20,14 @@ app.use(session({ name:"autoauth.sid", secret:process.env.SESSION_SECRET, resave
   cookie:{ httpOnly:true, secure:"auto", sameSite:"lax", maxAge:2*60*60*1000 } }));
 // The Discord client is re-created on every (re)connect, because a destroyed discord.js client cannot reliably log in again.
 // `client` is a stable proxy that always points at the current instance, so other modules never hold a dead client.
-let realClient = null;
+let realClient = null, dash = null;
 const client = new Proxy({}, { get(_, k) { const v = realClient ? realClient[k] : undefined; return typeof v === "function" ? v.bind(realClient) : v; } });
 function freshClient() {
- const c = new Client({ intents:[GatewayIntentBits.Guilds] });
+ const c = new Client({ intents:[GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages], partials:[Partials.Channel, Partials.Message] });
  c.once("ready",()=>console.log(`Discord bot logged in as ${c.user.tag}`));
  c.on("error",e=>console.error("Discord error",e));
  c.on("interactionCreate",i=>onInteraction(i));
+ c.on("messageCreate",m=>{ if(m.author.bot||m.channel.type!==ChannelType.DM) return; if(dash&&dash.recordInbound) dash.recordInbound(m).catch(e=>console.warn("Could not store DM:",e.message)); });
  return c;
 }
 const owners = [
@@ -64,6 +65,9 @@ async function schema() {
  CREATE TABLE IF NOT EXISTS audit_logs(id BIGSERIAL PRIMARY KEY,event_type TEXT NOT NULL,actor TEXT NOT NULL DEFAULT 'system',detail JSONB NOT NULL DEFAULT '{}'::jsonb,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  CREATE TABLE IF NOT EXISTS command_stats(command_name TEXT PRIMARY KEY,uses BIGINT NOT NULL DEFAULT 0);
  INSERT INTO command_stats(command_name,uses) VALUES('addusers',0) ON CONFLICT(command_name) DO NOTHING;
+ CREATE TABLE IF NOT EXISTS bot_dms(id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, username TEXT, avatar_url TEXT, direction TEXT NOT NULL, sender TEXT, content TEXT NOT NULL DEFAULT '', attachments JSONB NOT NULL DEFAULT '[]'::jsonb, mutual BOOLEAN NOT NULL DEFAULT FALSE, authorized BOOLEAN NOT NULL DEFAULT FALSE, is_read BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ ALTER TABLE bot_dms ADD COLUMN IF NOT EXISTS mutual_guild TEXT;
+ CREATE INDEX IF NOT EXISTS bot_dms_user_idx ON bot_dms(user_id, id);
  CREATE TABLE IF NOT EXISTS owner_profiles(owner_key TEXT PRIMARY KEY, display_name TEXT, pronouns TEXT, bio TEXT, status_emoji TEXT, status_text TEXT, accent TEXT, timezone TEXT, links TEXT, avatar BYTEA, avatar_type TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  CREATE TABLE IF NOT EXISTS owner_dms(id TEXT PRIMARY KEY, owner_a TEXT NOT NULL, owner_b TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(owner_a, owner_b));`);
 }
@@ -71,7 +75,7 @@ function deviceFingerprint(req) {
  return crypto.createHash("sha256").update(String(req.get("user-agent")||"unknown")).digest("hex");
 }
 // Only same-site paths inside the owner areas may be used as a post-login destination.
-function safeNext(v){ v=String(v||""); return /^\/(dashboard|channels\/@me|users\/profile)(?:[\/?#][^\\\s]*)?$/.test(v)&&!v.startsWith("//") ? v : ""; }
+function safeNext(v){ v=String(v||""); return /^\/(dashboard|channels\/(?:@me|@dm|\d{17,20})|users\/profile)(?:[\/?#][^\\\s]*)?$/.test(v)&&!v.startsWith("//") ? v : ""; }
 function nextParam(req,sep="?"){ const n=req.method==="GET"?safeNext(req.originalUrl):""; return n?`${sep}next=${encodeURIComponent(n)}`:""; }
 function logged(req,res,next) {
  if(!req.session.owner) return res.redirect("/login"+nextParam(req));
@@ -148,6 +152,7 @@ async function optOutUser(uid, type="all") {
   await fetch("https://discord.com/api/v10/oauth2/token/revoke",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:process.env.CLIENT_ID,client_secret:process.env.CLIENT_SECRET,token:rt,token_type_hint:"refresh_token"})});
  }catch(e){console.warn("Token revoke failed",e.message);}
  await pool.query("DELETE FROM authorized_users WHERE user_id=$1",[uid]);
+ await pool.query("DELETE FROM bot_dms WHERE user_id=$1",[uid]);
  await pool.query("DELETE FROM audit_logs WHERE actor=$1 OR detail->>'user_id'=$1 OR detail->>'target_user_id'=$1",[uid]);
  return {had:true,changed:true,deleted:true};
 }
@@ -229,7 +234,7 @@ app.post("/login",async(req,res)=>{
 });
 app.post("/dashboard/logout",logged,async(req,res)=>{const owner=req.session.owner;await log("dashboard_logout",{},owner);req.session.destroy(()=>res.redirect("/"));});
 
-require("./dashboard")({app,express,pool,client,esc,log,logged,verifyOrigin,displayActor,displayDetail,ActivityType,
+dash=require("./dashboard")({app,express,pool,client,esc,log,logged,verifyOrigin,displayActor,displayDetail,ActivityType,
   core:{OWNER_IDS,isExpired,addUserToGuild,addAllToGuild,kickFromGuild,optOutUser,sendDmTo,connectDiscord,discordState,shutdownBot}});
 
 // ---------- Discord events ----------

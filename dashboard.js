@@ -5,6 +5,7 @@ module.exports = function mountDashboard(c) {
 
   const EXPIRY = [["30m", "30 minutes"], ["1h", "1 hour"], ["6h", "6 hours"], ["12h", "12 hours"], ["1d", "1 day"], ["7d", "7 days"], ["30d", "30 days"], ["never", "Never"]];
   const INTERVALS = { "30m": "30 minutes", "1h": "1 hour", "6h": "6 hours", "12h": "12 hours", "1d": "1 day", "7d": "7 days", "30d": "30 days" };
+  const dmsApi = {};
   const ts = (x) => esc(new Date(x).toISOString().replace("T", " ").slice(0, 19));
 
   // ---------- layout ----------
@@ -102,7 +103,7 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
   function shell(tab, owner, content, flash) {
     const a = (k, href, label) => `<a class="${tab === k ? "on" : ""}" href="${href}">${label}</a>`;
     return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AutoAuth Dashboard</title><style>${CSS}</style></head><body><div class="layout"><aside class="side"><div class="brand">◈ AutoAuth</div><nav class="nav">
- ${a("home", "/dashboard", "Bot Control")}${a("db", "/dashboard/users", "Users")}${a("servers", "/dashboard/servers", "Servers")}${a("dm", "/dashboard/dm", "DM Users")}${a("msg", "/channels/@me", "Messages")}${a("logs", "/dashboard/logs", "Logs")}</nav><p class="muted" style="margin:28px 12px">Signed in as <a href="/channels/@me" title="Open messages" style="text-decoration:underline"><b>${esc(owner)}</b></a></p><form method="post" action="/dashboard/logout"><button class="secondary" style="width:100%">Log out</button></form><a class="muted addbot" style="display:block;margin-top:14px;padding:6px 12px;text-decoration:underline" href="https://discord.com/oauth2/authorize?client_id=${esc(process.env.CLIENT_ID)}&amp;permissions=8&amp;integration_type=0&amp;scope=bot" target="_blank" rel="noopener">Add bot to server</a></aside><main>${content}</main></div><dialog id="dlg-msg" class="flash-dlg"><div class="dlg-top"><h2 id="msg-title" style="margin:0"></h2><button type="button" class="secondary" onclick="closeAll()">Close</button></div><p id="msg-text"></p></dialog><script>${CLIENT_JS}${flash ? `document.addEventListener("DOMContentLoaded",function(){showMsg("Done",${JSON.stringify(String(flash)).replace(/</g, "\\u003c")});});` : ""}</script></body></html>`;
+ ${a("home", "/dashboard", "Bot Control")}${a("db", "/dashboard/users", "Users")}${a("servers", "/dashboard/servers", "Servers")}${a("dm", "/dashboard/dm", "DM Users")}${a("msg", "/channels/@me", "Messages")}${a("logs", "/dashboard/logs", "Logs")}</nav><p class="muted" style="margin:28px 12px">Signed in as <a href="/users/profile" title="Open your profile" style="text-decoration:underline"><b>${esc(owner)}</b></a></p><form method="post" action="/dashboard/logout"><button class="secondary" style="width:100%">Log out</button></form><a class="muted addbot" style="display:block;margin-top:14px;padding:6px 12px;text-decoration:underline" href="https://discord.com/oauth2/authorize?client_id=${esc(process.env.CLIENT_ID)}&amp;permissions=8&amp;integration_type=0&amp;scope=bot" target="_blank" rel="noopener">Add bot to server</a></aside><main>${content}</main></div><dialog id="dlg-msg" class="flash-dlg"><div class="dlg-top"><h2 id="msg-title" style="margin:0"></h2><button type="button" class="secondary" onclick="closeAll()">Close</button></div><p id="msg-text"></p></dialog><script>${CLIENT_JS}${flash ? `document.addEventListener("DOMContentLoaded",function(){showMsg("Done",${JSON.stringify(String(flash)).replace(/</g, "\\u003c")});});` : ""}</script></body></html>`;
   }
   function render(req, res, tab, content) {
     const flash = req.session.flash; delete req.session.flash;
@@ -330,15 +331,6 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
   });
 
   // ---------- DM Users ----------
-  app.get("/dashboard/dm", logged, async (req, res) => {
-    try {
-      const r = await pool.query("SELECT user_id,username,authorized_at FROM authorized_users WHERE dm_authorized ORDER BY authorized_at DESC LIMIT 500");
-      const content = `<div class="top"><div><h1>DM Users</h1><p class="muted">Members who allowed direct messages. Select one or more, write a message, and optionally attach files.</p></div></div>
-  <div class="card${lk()}">${ov()}<div class="wrap"><table><tr><th style="width:36px"><input type="checkbox" style="width:auto;margin:0" onchange="dmToggleAll(this)" aria-label="Select all"></th><th>Username</th><th>Discord ID</th><th>Authorized at (UTC)</th></tr>${r.rows.map((u) => `<tr><td><input type="checkbox" class="dm-check" style="width:auto;margin:0" value="${esc(u.user_id)}"></td><td>${esc(u.username)}</td><td>${esc(u.user_id)}</td><td>${ts(u.authorized_at)}</td></tr>`).join("") || "<tr><td colspan=4>Nobody has allowed DMs yet.</td></tr>"}</table></div></div>
-  <div class="card${lk()}">${ov()}<h2>Compose</h2><label>Message</label><textarea id="dt-msg" maxlength="2000" placeholder="Write your message"></textarea><label>Attachments (optional, up to 5 files, 8 MB total)</label><input type="file" id="dt-files" multiple><button type="button" id="dt-send" onclick="dmTabSend()">Send to selected</button><div class="muted dm-status" id="dt-status"></div><p class="muted">Discord only delivers a DM if the member's privacy settings allow it, so some may fail. Message text and files are not stored by AutoAuth.</p></div>`;
-      render(req, res, "dm", content);
-    } catch (e) { console.error(e); res.status(500).send("DM page failed to load."); }
-  });
   app.post("/dashboard/dm/send", logged, verifyOrigin, express.json({ limit: "14mb" }), async (req, res) => {
     const b = req.body || {};
     const ids = Array.isArray(b.ids) ? [...new Set(b.ids.map(String))].filter(validUid).slice(0, 200) : [];
@@ -357,14 +349,15 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
     if (!message && !files.length) return res.status(400).json({ error: "Write a message or attach a file." });
     if (!client.isReady()) return res.status(503).json({ error: "Discord bot is disconnected." });
     try {
-      const ok = await pool.query("SELECT user_id,username FROM authorized_users WHERE user_id = ANY($1) AND dm_authorized", [ids]);
+      const ok = await pool.query("SELECT user_id,username FROM authorized_users WHERE user_id = ANY($1) AND dm_authorized UNION SELECT DISTINCT ON (user_id) user_id,username FROM bot_dms WHERE user_id = ANY($1) AND direction='in' ORDER BY 1", [ids]);
       const allowed = new Set(ok.rows.map((x) => x.user_id)), names = new Map(ok.rows.map((x) => [x.user_id, x.username]));
       let sent = 0, failed = 0; const errors = [];
       for (const id of ids) {
-        if (!allowed.has(id)) { failed++; if (errors.length < 5) errors.push(`${names.get(id) || id}: has not allowed DMs`); continue; }
+        if (!allowed.has(id)) { failed++; if (errors.length < 5) errors.push(`${names.get(id) || id}: has not allowed DMs or messaged the bot`); continue; }
         try {
           await sendDmTo(id, { content: message || undefined, files });
           sent++;
+          dmsApi.recordOutbound && await dmsApi.recordOutbound(id, names.get(id), req.session.owner, message, files).catch(() => {});
           await log("dm_sent", { target_user_id: id, chars: message.length, files: files.length }, req.session.owner);
         } catch (e) { failed++; if (errors.length < 5) errors.push(`${names.get(id) || id}: ${e.code === 50007 ? "Discord would not deliver the message (the user blocks DMs from this bot)" : String(e.message).slice(0, 100)}`); }
       }
@@ -385,4 +378,6 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
   });
 
   require("./messages")({ app, pool, express, logged, verifyOrigin, esc, render });
+  Object.assign(dmsApi, require("./dms")({ app, pool, client, esc, logged, verifyOrigin, render, lk, ov }));
+  return dmsApi;
 };

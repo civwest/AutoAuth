@@ -193,7 +193,7 @@ const privacyBody = `
 </ul>
 <p>We do not receive your email address, password, your messages, friends list, or the list of servers you are in.</p>
 <p><b>Check before you continue:</b> the Authorization page shows a captcha. It uses a short-lived signed token and is handled entirely by this site, with no third-party captcha service. Your IP address may be held in server memory for a few minutes for rate limiting and is not stored in the database.</p>
-<p><b>Logs:</b> we keep an audit log of events such as commands used, authorizations and opt-outs, adds and removals from servers, and direct messages sent. Entries can include the relevant Discord user IDs, server IDs and names, and outcomes. For direct messages we log the recipient, the message length, and the number of attachments, but not the message text or the files. When an owner signs in to the private dashboard, we log the sign-in and IP address and set a session cookie used only for that dashboard. Visitors to the public pages receive no cookies from us.</p>
+<p><b>Logs:</b> we keep an audit log of events such as commands used, authorizations and opt-outs, adds and removals from servers, and direct messages sent. Entries can include the relevant Discord user IDs, server IDs and names, and outcomes. For direct messages the audit log records the recipient, the message length, and the number of attachments, but not the message text or the files. When an owner signs in to the private dashboard, we log the sign-in and IP address and set a session cookie used only for that dashboard. Visitors to the public pages receive no cookies from us.</p>
 
 <h2>2. How we use it</h2>
 <ul>
@@ -210,6 +210,7 @@ const privacyBody = `
 <h2>4. Where it is stored</h2>
 <p>Data is stored in a PostgreSQL database and the bot runs on Render. Discord processes the authorization, and any message we send, under its own <a href="https://discord.com/privacy" target="_blank" rel="noopener">Privacy Policy</a>.</p>
 
+<p><b>Direct messages with the bot:</b> if you message the bot in a Discord DM, or the owners message you, the conversation is stored so the owners can read and reply to it in the dashboard. We keep your Discord username, ID and avatar link, the message text, and the names and links of any attachments. Each message is tagged as a mutual server DM (you share a server with the bot), an authorized DM (you allowed DMs on this website) or another DM. These messages are deleted automatically after the retention period (30 days by default), when an owner deletes the conversation, or when you opt out of everything.</p>
 <h2>5. Retention and expiry</h2>
 <p>By default an authorization stays active until you opt out. The owners can set an expiry date on an authorization; once it passes, the authorization is no longer used for adds, and it can be extended or deleted. Audit log entries are kept for security and troubleshooting, and those that contain your user ID are deleted when you opt out of everything.</p>
 

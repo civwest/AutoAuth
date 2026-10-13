@@ -54,6 +54,7 @@ No IDs, names, links or invite URLs live in the code. Everything personal comes 
 | `LINK_DOCS` | URL opened by the Documentation tab (e.g. your GitHub repo). Hidden if unset. |
 | `LINK_TIKTOK`, `LINK_YOUTUBE`, `LINK_X`, `LINK_TWITCH`, `LINK_DISCORD` | Footer "Follow the creator" links (`LINK_DISCORD` = your server invite). Each icon is hidden if unset. |
 | `DATABASE_SSL` | Optional. Set to `disable` only for a local database. |
+| `DM_RETENTION_DAYS` | Optional. How many days stored DM chats are kept before automatic deletion (default `30`; `0` keeps them until deleted). |
 | `DISCORD_DOMAIN_VERIFICATION` | Optional. The value Discord shows when you add your domain to your account (looks like `dh=...`). The site serves it at `/.well-known/discord`. |
 | `GOOGLE_VERIFICATION_FILE` | Optional (not needed if you verified by DNS). The name of Google's verification file (e.g. `google1234abcd.html`); the site serves it at that path. |
 | `GOOGLE_SITE_VERIFICATION` | Optional. The meta-tag content value, as an alternative to the file. |
@@ -84,6 +85,7 @@ Keep real passwords, tokens and hashes out of GitHub.
 | `/optout` | Self-service opt-out (Discord sign-in, then choose server / DM / everything) |
 | `/terms-of-service`, `/privacy-policy` | Legal pages (`/tos` redirects) |
 | `/login`, `/dashboard` | Owner dashboard: Bot Control, Users, Servers, DM Users, Logs |
+| `/channels/<server-id>/<userid>`, `/channels/@dm/<userid>` | Owner view of one DM chat with a person (server id = a server they share with the bot) |
 | `/channels/@me`, `/channels/@me/<id>` | Owner-only private chat (no Discord connection needed). Messages are kept in memory only and cleared when the chat is closed. |
 | `/users/profile`, `/users/profile/edit` | Owner profiles (picture, name, pronouns, status, about, time zone, links, colour) |
 | `/.well-known/discord` | Discord domain verification (set `DISCORD_DOMAIN_VERIFICATION`) |

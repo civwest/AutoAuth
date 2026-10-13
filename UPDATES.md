@@ -86,3 +86,13 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 
 ## v1.3.6
 - **Messages** is now its own tab in the dashboard sidebar (between DM Users and Logs). It stays highlighted on the chat and profile pages. "Signed in as" still links to it.
+
+## v1.3.7
+- "Signed in as" in the sidebar now opens your profile (`/users/profile`) instead of Messages. Profile pages no longer highlight the Messages tab.
+
+## DM Users as individual chats (part of v1.3.7)
+- **DM Users** is now a list of one chat per person, and each person opens as a Discord-style thread (`/dashboard/dm/<userid>`). It shows what the owners sent from the dashboard and what people send to the bot in Discord DMs, with unread counts, attachment links and a reply box.
+- Tags: **Mutual server DM** (the sender shares a server with the bot), **Authorized DM** (they allowed DMs on the website) and **Other DM**.
+- The bot now receives DMs (Discord's non-privileged `DirectMessages` intent; no Developer Portal change). Stored in the new `bot_dms` table; deleted after `DM_RETENTION_DAYS` (default 30), when an owner deletes the conversation, or when the person opts out of everything. The Privacy Policy describes this.
+- Owners can reply to anyone who has messaged the bot, not only people who allowed DMs on the website.
+- DM chat URLs are now `/channels/<mutual-server-id>/<userid>` (the id of a server the person shares with the bot, found when they message it). People with no mutual server use `/channels/@dm/<userid>`. The old `/dashboard/dm/<userid>` URL redirects. New column `bot_dms.mutual_guild` is added automatically.

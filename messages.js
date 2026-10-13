@@ -55,7 +55,7 @@ module.exports = function mountMessages(c) {
 <div class="card" style="max-width:640px;overflow:hidden"><div class="banner" style="background:${esc(p.accent)}"></div><div style="display:flex;gap:16px;align-items:flex-end;margin-top:-48px">${avatar(p, "lg")}<div style="padding-bottom:6px"><h2 style="margin:0">${esc(p.name)}</h2><div class="muted">${esc(p.user)}${p.pronouns ? " · " + esc(p.pronouns) : ""}</div></div></div>
 <p>${p.emoji || p.status ? `${esc(p.emoji)} ${esc(p.status)}` : '<span class="muted">No status set</span>'}</p>
 ${p.bio ? `<h3>About</h3><p style="white-space:pre-wrap">${esc(p.bio)}</p>` : ""}${local ? `<h3>Local time</h3><p>${esc(local)}</p>` : ""}${links ? `<h3>Links</h3>${links}` : ""}</div>${!mine && !other ? "" : ""}`;
-    render(req, res, "msg", content);
+    render(req, res, "profile", content);
   });
 
   app.get("/users/profile/edit", logged, owner, async (req, res) => {
@@ -72,7 +72,7 @@ ${p.bio ? `<h3>About</h3><p style="white-space:pre-wrap">${esc(p.bio)}</p>` : ""
 <label>Profile colour</label><input type="color" id="pf-accent" value="${esc(p.accent)}" style="width:80px;height:40px;padding:2px">
 <div style="margin-top:16px"><button type="button" class="green" id="pf-save">Save profile</button></div></div>
 <script>${EDIT_JS}</script>`;
-    render(req, res, "msg", content);
+    render(req, res, "profile", content);
   });
 
   const EDIT_JS = `
