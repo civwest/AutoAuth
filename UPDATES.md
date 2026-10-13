@@ -103,3 +103,20 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 - Users tab: the **Add to server** buttons are greyed out while the bot is offline.
 - Privacy Policy updated for Linked Roles.
 - Developer Portal step: set **Linked Roles Verification URL** to `https://YOUR-SITE/linked-role` (General Information).
+
+## v1.3.9
+- **Linked Roles redesigned** like partner/affiliate badges for a single server. Members only connect through the verification URL; they do **not** need to authorize AutoAuth. The Linked Roles tab now lets you:
+  - define up to 5 requirements (the Discord limit), each **Manual** (you switch it on per person, e.g. Partner, Affiliate; defaults added on first start) or **Auto** (worked out from AutoAuth status: authorized for server joins, authorized for DMs, or connected for N days);
+  - assign or remove manual requirements per member with one click, or by Discord ID before the person has even connected;
+  - press **Refresh** to register the requirements with Discord and re-send every connected member's status.
+  New tables `role_defs` and `role_assign` are created automatically.
+- **Offline lock:** on the Servers, DM Users and Linked Roles pages the whole page (everything except the sidebar) is greyed out with a "You have to start the bot first" box and **Start the bot** button, and the page can't scroll. Bot Control keeps its per-box overlays.
+- **Main site:** when the owners shut the bot down manually, the home page says "The Discord connection was temporarily severed by the owners" instead of "AutoAuth is starting up".
+- **Images:** the background and icon are now also built into `embedded-images.js`, so they load even if `public/` is missing from the deployed repository. A file in `public/` still takes priority.
+- Privacy Policy updated for the new Linked Roles behaviour.
+
+## v1.4.0
+- **Linked Roles: Twitch requirements** (StreamCord style) on top of Manual and AutoAuth-status requirements. New requirement type *Auto: connected Twitch account*: has a connected Twitch account, follows a given channel, or is subscribed to a given channel. After connecting Discord, members are sent to Twitch to sign in; status is checked live on connect and on **Refresh**.
+- No Twitch Partner/Affiliate rules and no default Partner/Affiliate roles any more.
+- Needs `TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET` and the Twitch redirect URL `https://YOUR-SITE/twitch/callback`. New table `twitch_links` (tokens encrypted); `role_defs` gains `rule_text`, `rule_id`. Twitch data is deleted when a member opts out of everything.
+- Web opt-out now works for people who only connected Linked Roles. Privacy Policy updated for Twitch.

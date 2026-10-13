@@ -8,7 +8,7 @@ See [UPDATES.md](UPDATES.md) for a description of every feature and recent chang
 
 ## 1. Nothing personal is hard-coded
 
-No IDs, names, links or invite URLs live in the code. Everything personal comes from Render environment variables (section 3), so the files can stay public and be used as they are. The only files you may want to swap are the images:
+No IDs, names, links or invite URLs live in the code. Everything personal comes from Render environment variables (section 3), so the files can stay public and be used as they are. The only files you may want to swap are the images (the site falls back to built-in copies in `embedded-images.js` if `public/` is missing them):
 
 | File | What to change |
 |---|---|
@@ -25,7 +25,7 @@ No IDs, names, links or invite URLs live in the code. Everything personal comes 
 5. **Installation tab:** enable **User Install** (needed for the DM authorization option) and **Guild Install**.
 6. Optionally restrict who can add the bot: untick **Public Bot** on the Bot tab.
 
-**Linked Roles (optional):** in the Developer Portal open **General Information** and set **Linked Roles Verification URL** to `https://YOUR-SITE/linked-role`. Then open the dashboard's **Linked Roles** tab and press **Refresh** once. Server admins add the AutoAuth requirements under Server Settings > Roles > Links.
+**Linked Roles (optional):** in the Developer Portal open **General Information** and set **Linked Roles Verification URL** to `https://YOUR-SITE/linked-role`. Then open the dashboard's **Linked Roles** tab, add up to 5 requirements and press **Refresh**. Requirement types: **Manual** (you switch it on per person), **Auto: AutoAuth status** (server joins, DMs, or N days authorized) and **Auto: connected Twitch account** (has a Twitch account, follows a channel, or is subscribed to a channel). In your server add them under Server Settings > Roles > (a role) > Links. Members connect once; they do not have to authorize AutoAuth. Twitch requirements need the Twitch app below.
 
 ## 3. Render setup
 
@@ -54,6 +54,7 @@ No IDs, names, links or invite URLs live in the code. Everything personal comes 
 | `OWNER1_NAME` / `OWNER2_NAME` | Display names for those owners in Logs. |
 | `SITE_OPERATOR` | Name shown in the legal pages and footer as the person running the site (e.g. `Jane Doe`). Defaults to "the site owner". |
 | `LINK_DOCS` | URL opened by the Documentation tab (e.g. your GitHub repo). Hidden if unset. |
+| `TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET` | Optional, only for Twitch requirements. Create an app at https://dev.twitch.tv/console and add the OAuth Redirect URL `https://YOUR-SITE/twitch/callback`. Client ID and Secret go here. |
 | `LINK_TIKTOK`, `LINK_YOUTUBE`, `LINK_X`, `LINK_TWITCH`, `LINK_DISCORD` | Footer "Follow the creator" links (`LINK_DISCORD` = your server invite). Each icon is hidden if unset. |
 | `DATABASE_SSL` | Optional. Set to `disable` only for a local database. |
 | `DM_RETENTION_DAYS` | Optional. How many days stored DM chats are kept before automatic deletion (default `30`; `0` keeps them until deleted). |
@@ -90,6 +91,7 @@ Keep real passwords, tokens and hashes out of GitHub.
 | `/channels/<server-id>/<userid>`, `/channels/@dm/<userid>` | Owner view of one DM chat with a person (server id = a server they share with the bot) |
 | `/channels/@me`, `/channels/@me/<id>` | Owner-only private chat (no Discord connection needed). Messages are kept in memory only and cleared when the chat is closed. |
 | `/users/profile`, `/users/profile/edit` | Owner profiles (picture, name, pronouns, status, about, time zone, links, colour) |
+| `/twitch/callback` | Twitch sign-in return (Linked Roles Twitch requirements) |
 | `/linked-role` | Linked Roles Verification URL (members connect here from Discord) |
 | `/.well-known/discord` | Discord domain verification (set `DISCORD_DOMAIN_VERIFICATION`) |
 | `/health` | Plain health check |

@@ -3,6 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const icons = require("./icons");
+const embedded = require("./embedded-images");
 
 const SITE = (() => { try { return new URL(process.env.REDIRECT_URI).origin; } catch { return "https://autoauth.cfd"; } })();
 // Everything personal comes from Render environment variables (see README). Unset links are simply hidden.
@@ -142,8 +143,8 @@ ${LINKS.discord ? `<a href="${LINKS.discord}" target="_blank" rel="noopener" tit
 </div></footer><script>${CLIENT_JS}</script></body></html>`;
 }
 
-const homeBody = (online, stats) => `
-<h1><span class="dot${online ? "" : " off"}"></span>${online ? "AutoAuth is online" : "AutoAuth is starting up"}</h1>
+const homeBody = (online, stats, paused) => `
+<h1><span class="dot${online ? "" : " off"}"></span>${online ? "AutoAuth is online" : paused ? "The Discord connection was temporarily severed by the owners" : "AutoAuth is starting up"}</h1>
 <p class="lead">${online ? "The bot is connected to Discord and ready to go." : "The bot is connecting to Discord. Refresh in a moment."}</p>
 ${stats ? `<div class="stats"><div class="stat"><b>${Number(stats.servers) || 0}</b><span>Servers</span></div><div class="stat"><b>${Number(stats.members) || 0}</b><span>Linked members</span></div><div class="stat"><b>${online ? "Online" : "Offline"}</b><span>Bot status</span></div></div>` : ""}
 <p><a class="cta" href="/auth">Authorize your account</a></p>
@@ -211,7 +212,7 @@ const privacyBody = `
 <p>Data is stored in a PostgreSQL database and the bot runs on Render. Discord processes the authorization, and any message we send, under its own <a href="https://discord.com/privacy" target="_blank" rel="noopener">Privacy Policy</a>.</p>
 
 <p><b>Direct messages with the bot:</b> if you message the bot in a Discord DM, or the owners message you, the conversation is stored so the owners can read and reply to it in the dashboard. We keep your Discord username, ID and avatar link, the message text, and the names and links of any attachments. Each message is tagged as a mutual server DM (you share a server with the bot), an authorized DM (you allowed DMs on this website) or another DM. These messages are deleted automatically after the retention period (30 days by default), when an owner deletes the conversation, or when you opt out of everything.</p>
-<p><b>Linked Roles:</b> if you connect AutoAuth through Discord's Linked Roles, we send Discord your AutoAuth status (whether you allowed server joins or DMs, and how many days ago you authorized) so Discord can give you roles in servers that use it. For this we store your username, ID and encrypted tokens for the <code>role_connections.write</code> permission until you opt out of everything.</p>
+<p><b>Linked Roles:</b> if you connect through Discord's Linked Roles, we send Discord role flags (for example whether you have authorized AutoAuth, or flags the owners set for you) so Discord can give you roles in the server that uses them. If the server requires a Twitch account, you are also asked to sign in with Twitch and we store your Twitch ID, login name and encrypted Twitch tokens, only to check the requirement (such as following or subscribing to a channel). You do not need to authorize AutoAuth for this. We store your username, ID and encrypted tokens for the <code>role_connections.write</code> permission until you opt out of everything (which also deletes your Twitch link) or ask the owners to remove them.</p>
 <h2>5. Retention and expiry</h2>
 <p>By default an authorization stays active until you opt out. The owners can set an expiry date on an authorization; once it passes, the authorization is no longer used for adds, and it can be extended or deleted. Audit log entries are kept for security and troubleshooting, and those that contain your user ID are deleted when you opt out of everything.</p>
 
@@ -261,7 +262,7 @@ const tosBody = `
 <h2>9. Contact</h2>
 <p>Questions: join the ${ext(LINKS.discord, "Discord server")}.</p>`;
 
-module.exports = function mountSite(app, client, getStats) {
+module.exports = function mountSite(app, client, getStats, getState) {
   const page = (title, body, active) => layout({ title: title + " | AutoAuth", active, gap: "20vh", body });
 
   // Images are served from ./public.
@@ -269,8 +270,9 @@ module.exports = function mountSite(app, client, getStats) {
     const f = req.params.file;
     if (!Object.hasOwn(IMAGES, f)) return res.status(404).end();
     const local = path.join(PUBLIC_DIR, f);
-    if (!fs.existsSync(local)) return res.status(404).end();
-    return res.type("image/webp").set("Cache-Control", "public, max-age=86400").sendFile(local);
+    res.type("image/webp").set("Cache-Control", "public, max-age=86400");
+    if (fs.existsSync(local)) return res.send(fs.readFileSync(local)); // your own file in ./public wins
+    return res.send(Buffer.from(embedded[f], "base64")); // built-in copy, so the site never loses its images
   });
   // Google Search Console HTML-file verification (only active when GOOGLE_VERIFICATION_FILE is set).
   app.get(/^\/google[0-9a-f]{8,}\.html$/, (req, res) =>
@@ -282,7 +284,7 @@ module.exports = function mountSite(app, client, getStats) {
   app.get("/", async (_, res) => {
     let stats = null;
     try { stats = getStats ? await getStats() : null; } catch { stats = null; }
-    res.send(layout({ title: "AutoAuth", active: "home", body: homeBody(client.isReady(), stats) }));
+    res.send(layout({ title: "AutoAuth", active: "home", body: homeBody(client.isReady(), stats, !!(getState && getState().paused)) }));
   });
   app.get("/home", (_, res) => res.redirect(301, "/"));
   app.get("/info", (_, res) =>

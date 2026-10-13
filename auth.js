@@ -210,8 +210,9 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
       if (mode === "role") {
         try {
           const out = await roles.link(u, t);
-          await log("role_connection_linked", { user_id: u.id, authorized: out.authorized, server: out.meta.server_authorized, dm: out.meta.dm_authorized });
-          return res.send(site.page("Linked", `<h1>Connected to Discord</h1><p>Your AutoAuth status was sent to Discord.</p>${out.authorized ? "<p>Discord will now assign roles in servers that use AutoAuth requirements. Return to Discord to see them.</p>" : "<p>You have not authorized AutoAuth yet, so you will not qualify for roles. Visit the <a href='/auth'>Authorization page</a> first, then connect again from Discord.</p>"}`, "auth"));
+          if (out.needsTwitch) { await log("role_connection_linked", { user_id: u.id, step: "twitch" }); return res.redirect(303, await roles.twitchUrl(u.id)); }
+          await log("role_connection_linked", { user_id: u.id, roles: Object.keys(out.meta).filter((k) => out.meta[k]).join(",") });
+          return res.send(site.page("Connected", `<h1>Connected to Discord</h1><p>You are connected. Discord now assigns roles in servers that use these requirements. Return to Discord to see them.</p>`, "auth"));
         } catch (e) { await log("role_connection_failed", { error: e.message }); return res.status(502).send(site.page("Could not connect", `<h1>Could not connect</h1><p>Discord did not accept the connection. Please try again from Discord.</p>${retry}`, "auth")); }
       }
       if (mode === "optout") {
@@ -219,6 +220,10 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
         fetch("https://discord.com/api/v10/oauth2/token/revoke", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: process.env.CLIENT_ID, client_secret: process.env.CLIENT_SECRET, token: t.access_token, token_type_hint: "access_token" }) }).catch(() => {});
         const q = await pool.query("SELECT server_authorized, dm_authorized FROM authorized_users WHERE user_id=$1", [u.id]);
         const name = u.global_name || u.username || u.id;
+        if (!q.rows[0]) {
+          const rl = await pool.query("SELECT 1 FROM role_links WHERE user_id=$1 UNION SELECT 1 FROM twitch_links WHERE user_id=$1", [u.id]).catch(() => ({ rows: [] }));
+          if (rl.rows[0]) { const tk = makeTicket(u.id); return res.send(site.page("Opt out", `<h1>Opt out of AutoAuth</h1><p>Signed in as <b>${String(name).replace(/[<>&"']/g, "")}</b>. You are connected through Linked Roles.</p><form method="post" action="/optout/confirm" style="max-width:420px"><input type="hidden" name="ticket" value="${tk}"><button class="btn blue" name="type" value="all">Opt out of everything and delete my data</button></form>`, "auth")); }
+        }
         if (!q.rows[0]) return res.send(site.page("Opt out", `<h1>Nothing to remove</h1><p>Hi ${String(name).replace(/[<>&"']/g, "")}, AutoAuth has no saved authorization for your account.</p>`, "auth"));
         const row = q.rows[0];
         const have = [row.server_authorized ? "server joins" : "", row.dm_authorized ? "direct messages" : ""].filter(Boolean).join(" and ") || "nothing active";

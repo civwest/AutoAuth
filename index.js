@@ -68,6 +68,11 @@ async function schema() {
  CREATE TABLE IF NOT EXISTS bot_dms(id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, username TEXT, avatar_url TEXT, direction TEXT NOT NULL, sender TEXT, content TEXT NOT NULL DEFAULT '', attachments JSONB NOT NULL DEFAULT '[]'::jsonb, mutual BOOLEAN NOT NULL DEFAULT FALSE, authorized BOOLEAN NOT NULL DEFAULT FALSE, is_read BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  ALTER TABLE bot_dms ADD COLUMN IF NOT EXISTS mutual_guild TEXT;
  CREATE TABLE IF NOT EXISTS role_links(user_id TEXT PRIMARY KEY, username TEXT, access_token_enc TEXT NOT NULL, refresh_token_enc TEXT NOT NULL, expires_at BIGINT NOT NULL, linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ CREATE TABLE IF NOT EXISTS role_defs(key TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', mode TEXT NOT NULL DEFAULT 'manual', rule_type TEXT, rule_param INT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ ALTER TABLE role_defs ADD COLUMN IF NOT EXISTS rule_text TEXT;
+ ALTER TABLE role_defs ADD COLUMN IF NOT EXISTS rule_id TEXT;
+ CREATE TABLE IF NOT EXISTS twitch_links(user_id TEXT PRIMARY KEY, twitch_id TEXT NOT NULL, login TEXT NOT NULL, access_token_enc TEXT NOT NULL, refresh_token_enc TEXT NOT NULL, expires_at BIGINT NOT NULL, linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ CREATE TABLE IF NOT EXISTS role_assign(user_id TEXT NOT NULL, role_key TEXT NOT NULL, PRIMARY KEY(user_id, role_key));
  CREATE INDEX IF NOT EXISTS bot_dms_user_idx ON bot_dms(user_id, id);
  CREATE TABLE IF NOT EXISTS owner_profiles(owner_key TEXT PRIMARY KEY, display_name TEXT, pronouns TEXT, bio TEXT, status_emoji TEXT, status_text TEXT, accent TEXT, timezone TEXT, links TEXT, avatar BYTEA, avatar_type TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  CREATE TABLE IF NOT EXISTS owner_dms(id TEXT PRIMARY KEY, owner_a TEXT NOT NULL, owner_b TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(owner_a, owner_b));`);
@@ -141,6 +146,7 @@ function siteOrigin(){try{return new URL(process.env.REDIRECT_URI).origin;}catch
 async function optOutUser(uid, type="all") {
  const q=await pool.query("SELECT refresh_token_enc,server_authorized,dm_authorized FROM authorized_users WHERE user_id=$1",[uid]);
  const row=q.rows[0];
+ if(type==="all") await roles.unlink(uid).catch(()=>{});
  if(!row) return {had:false,changed:false,deleted:false};
  const full = type==="all" || (type==="server" && !row.dm_authorized) || (type==="dm" && !row.server_authorized);
  if(!full){
@@ -215,11 +221,12 @@ async function register() {
 }
 
 // ---------- website + authorization + dashboard ----------
-const site=require("./site")(app,client,getStats); // public site: /, /info, /terms-of-service, /privacy-policy
+const site=require("./site")(app,client,getStats,()=>discordState); // public site: /, /info, /terms-of-service, /privacy-policy
 app.get("/health",(_,res)=>res.send("ok"));
 // Discord domain verification (Discord > Settings > Domains asks you to serve this value at /.well-known/discord)
 app.get("/.well-known/discord",(req,res)=>{ const v=(process.env.DISCORD_DOMAIN_VERIFICATION||"").trim(); if(!/^dh=[0-9a-f]{20,64}$/i.test(v)) return res.status(404).type("text/plain").send("Not found"); res.type("text/plain").send(v); });
 roles=require("./roles")({pool,enc,dec,log});
+roles.mountPublic({app,site});
 require("./auth")(app,{site,pool,enc,log,equal,verifyOrigin,optOutUser,roles}); // /auth, /auth/captcha, /auth/start, /oauth/callback
 
 app.get("/dashboard/login",(req,res)=>res.redirect(302,"/login"));
@@ -302,6 +309,7 @@ realClient=freshClient();
 app.listen(port,"0.0.0.0",()=>console.log(`HTTP server listening on port ${port}`));
 (async()=>{
  try{ await schema(); }catch(e){ console.error("Database setup failed",e); process.exit(1); }
+ roles.init().catch(e=>console.warn('Linked role defaults failed:',e.message));
  syncAuthorizations().catch(e=>console.warn('Authorization check failed:',e.message));
  await connectDiscord(); // non-fatal: the dashboard shows a Retry button if this fails
 })();
