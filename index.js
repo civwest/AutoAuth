@@ -5,8 +5,10 @@ const session = require("express-session");
 const { Pool } = require("pg");
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits, ActivityType, MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle, Partials, ChannelType } = require("discord.js");
 
-const required = ["BOT_TOKEN","CLIENT_ID","CLIENT_SECRET","REDIRECT_URI","DATABASE_URL","TOKEN_ENCRYPTION_KEY","SESSION_SECRET","DASHBOARD_OWNER1_USER","DASHBOARD_OWNER1_PASSWORD_HASH","DASHBOARD_OWNER2_USER","DASHBOARD_OWNER2_PASSWORD_HASH"];
+const required = ["BOT_TOKEN","CLIENT_ID","CLIENT_SECRET","REDIRECT_URI","DATABASE_URL","TOKEN_ENCRYPTION_KEY","SESSION_SECRET"];
 for (const k of required) if (!process.env[k]) { console.error("Missing Render environment variable:", k); process.exit(1); }
+// Dashboard logins: DASHBOARD_ADMIN1_USER / DASHBOARD_ADMIN1_PASSWORD_HASH ... up to ADMIN9. The older DASHBOARD_OWNERn_* names still work.
+const adminEnv = (n, k) => process.env[`DASHBOARD_ADMIN${n}_${k}`] || process.env[`DASHBOARD_OWNER${n}_${k}`] || "";
 const key = Buffer.from(process.env.TOKEN_ENCRYPTION_KEY, "hex");
 if (key.length !== 32) { console.error("TOKEN_ENCRYPTION_KEY must be 64 hex characters."); process.exit(1); }
 
@@ -20,7 +22,7 @@ app.use(session({ name:"autoauth.sid", secret:process.env.SESSION_SECRET, resave
   cookie:{ httpOnly:true, secure:"auto", sameSite:"lax", maxAge:2*60*60*1000 } }));
 // The Discord client is re-created on every (re)connect, because a destroyed discord.js client cannot reliably log in again.
 // `client` is a stable proxy that always points at the current instance, so other modules never hold a dead client.
-let realClient = null, dash = null, roles = { syncUser: async()=>{}, unlink: async()=>{} };
+let realClient = null, dash = null;
 const client = new Proxy({}, { get(_, k) { const v = realClient ? realClient[k] : undefined; return typeof v === "function" ? v.bind(realClient) : v; } });
 function freshClient() {
  const c = new Client({ intents:[GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages], partials:[Partials.Channel, Partials.Message] });
@@ -30,10 +32,16 @@ function freshClient() {
  c.on("messageCreate",m=>{ if(m.author.bot||m.channel.type!==ChannelType.DM) return; if(dash&&dash.recordInbound) dash.recordInbound(m).catch(e=>console.warn("Could not store DM:",e.message)); });
  return c;
 }
-const owners = [
- {user:process.env.DASHBOARD_OWNER1_USER, hash:process.env.DASHBOARD_OWNER1_PASSWORD_HASH},
- {user:process.env.DASHBOARD_OWNER2_USER, hash:process.env.DASHBOARD_OWNER2_PASSWORD_HASH}
-];
+const ADMIN_PERMS = ["bot","users","servers","dm","logs"];
+const owners = [];
+for (let n=1;n<=9;n++) {
+ const user=adminEnv(n,"USER"), hash=adminEnv(n,"PASSWORD_HASH"); if(!user||!hash) continue;
+ // DASHBOARD_ADMINn_PERMISSIONS: "all" or a comma list of bot,users,servers,dm,logs. Nobody gets default access: if this is not set the user can only use Messages.
+ const raw=adminEnv(n,"PERMISSIONS").trim().toLowerCase();
+ const perms=new Set(raw==="all"||false?ADMIN_PERMS:raw.split(/[ ,]+/).filter(p=>ADMIN_PERMS.includes(p)));
+ owners.push({key:String(n),user,hash,perms});
+}
+if(!owners.length) console.warn("No dashboard logins are set (DASHBOARD_ADMINn_USER / _PASSWORD_HASH), so nobody can sign in to the dashboard.");
 const attempts = new Map();
 
 function enc(s) { const iv=crypto.randomBytes(12), c=crypto.createCipheriv("aes-256-gcm",key,iv), b=Buffer.concat([c.update(s,"utf8"),c.final()]); return [iv,c.getAuthTag(),b].map(x=>x.toString("base64")).join("."); }
@@ -43,7 +51,7 @@ function verify(pw, h) { try { const [alg,salt,expected]=h.split("$"); if(alg!==
 function esc(s) { return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 // Owner Discord IDs come from Render variables (OWNER1_DISCORD_ID / OWNER1_NAME, OWNER2_DISCORD_ID / OWNER2_NAME).
 const DISCORD_OWNER_LABELS = {};
-for (const n of ["1","2"]) { const id=(process.env[`OWNER${n}_DISCORD_ID`]||"").trim(); if(/^\d{17,20}$/.test(id)) DISCORD_OWNER_LABELS[id]=process.env[`OWNER${n}_NAME`]||`Owner ${n}`; }
+for (const n of ["1","2","3","4","5","6","7","8","9"]) { const id=(process.env[`OWNER${n}_DISCORD_ID`]||"").trim(); if(/^\d{17,20}$/.test(id)) DISCORD_OWNER_LABELS[id]=process.env[`OWNER${n}_NAME`]||`Owner ${n}`; }
 const OWNER_IDS = Object.keys(DISCORD_OWNER_LABELS);
 function displayActor(actor) {
  const value = String(actor ?? "system");
@@ -67,12 +75,8 @@ async function schema() {
  INSERT INTO command_stats(command_name,uses) VALUES('addusers',0) ON CONFLICT(command_name) DO NOTHING;
  CREATE TABLE IF NOT EXISTS bot_dms(id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, username TEXT, avatar_url TEXT, direction TEXT NOT NULL, sender TEXT, content TEXT NOT NULL DEFAULT '', attachments JSONB NOT NULL DEFAULT '[]'::jsonb, mutual BOOLEAN NOT NULL DEFAULT FALSE, authorized BOOLEAN NOT NULL DEFAULT FALSE, is_read BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  ALTER TABLE bot_dms ADD COLUMN IF NOT EXISTS mutual_guild TEXT;
- CREATE TABLE IF NOT EXISTS role_links(user_id TEXT PRIMARY KEY, username TEXT, access_token_enc TEXT NOT NULL, refresh_token_enc TEXT NOT NULL, expires_at BIGINT NOT NULL, linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
- CREATE TABLE IF NOT EXISTS role_defs(key TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', mode TEXT NOT NULL DEFAULT 'manual', rule_type TEXT, rule_param INT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
- ALTER TABLE role_defs ADD COLUMN IF NOT EXISTS rule_text TEXT;
- ALTER TABLE role_defs ADD COLUMN IF NOT EXISTS rule_id TEXT;
- CREATE TABLE IF NOT EXISTS twitch_links(user_id TEXT PRIMARY KEY, twitch_id TEXT NOT NULL, login TEXT NOT NULL, access_token_enc TEXT NOT NULL, refresh_token_enc TEXT NOT NULL, expires_at BIGINT NOT NULL, linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
- CREATE TABLE IF NOT EXISTS role_assign(user_id TEXT NOT NULL, role_key TEXT NOT NULL, PRIMARY KEY(user_id, role_key));
+ DROP TABLE IF EXISTS role_links, role_defs, role_assign, twitch_links;
+ ALTER TABLE owner_profiles ADD COLUMN IF NOT EXISTS discord TEXT;
  CREATE INDEX IF NOT EXISTS bot_dms_user_idx ON bot_dms(user_id, id);
  CREATE TABLE IF NOT EXISTS owner_profiles(owner_key TEXT PRIMARY KEY, display_name TEXT, pronouns TEXT, bio TEXT, status_emoji TEXT, status_text TEXT, accent TEXT, timezone TEXT, links TEXT, avatar BYTEA, avatar_type TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  CREATE TABLE IF NOT EXISTS owner_dms(id TEXT PRIMARY KEY, owner_a TEXT NOT NULL, owner_b TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(owner_a, owner_b));`);
@@ -146,12 +150,11 @@ function siteOrigin(){try{return new URL(process.env.REDIRECT_URI).origin;}catch
 async function optOutUser(uid, type="all") {
  const q=await pool.query("SELECT refresh_token_enc,server_authorized,dm_authorized FROM authorized_users WHERE user_id=$1",[uid]);
  const row=q.rows[0];
- if(type==="all") await roles.unlink(uid).catch(()=>{});
  if(!row) return {had:false,changed:false,deleted:false};
  const full = type==="all" || (type==="server" && !row.dm_authorized) || (type==="dm" && !row.server_authorized);
  if(!full){
-  if(type==="server"){await pool.query("UPDATE authorized_users SET server_authorized=FALSE WHERE user_id=$1",[uid]);roles.syncUser(uid).catch(()=>{});return {had:true,changed:!!row.server_authorized,deleted:false};}
-  await pool.query("UPDATE authorized_users SET dm_authorized=FALSE WHERE user_id=$1",[uid]);roles.syncUser(uid).catch(()=>{});return {had:true,changed:!!row.dm_authorized,deleted:false};
+  if(type==="server"){await pool.query("UPDATE authorized_users SET server_authorized=FALSE WHERE user_id=$1",[uid]);return {had:true,changed:!!row.server_authorized,deleted:false};}
+  await pool.query("UPDATE authorized_users SET dm_authorized=FALSE WHERE user_id=$1",[uid]);return {had:true,changed:!!row.dm_authorized,deleted:false};
  }
  // Full opt-out: revoke the grant at Discord (best effort), delete the record and related log entries.
  try{
@@ -159,7 +162,6 @@ async function optOutUser(uid, type="all") {
   await fetch("https://discord.com/api/v10/oauth2/token/revoke",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:process.env.CLIENT_ID,client_secret:process.env.CLIENT_SECRET,token:rt,token_type_hint:"refresh_token"})});
  }catch(e){console.warn("Token revoke failed",e.message);}
  await pool.query("DELETE FROM authorized_users WHERE user_id=$1",[uid]);
- await roles.unlink(uid).catch(()=>{});
  await pool.query("DELETE FROM bot_dms WHERE user_id=$1",[uid]);
  await pool.query("DELETE FROM audit_logs WHERE actor=$1 OR detail->>'user_id'=$1 OR detail->>'target_user_id'=$1",[uid]);
  return {had:true,changed:true,deleted:true};
@@ -225,9 +227,7 @@ const site=require("./site")(app,client,getStats,()=>discordState); // public si
 app.get("/health",(_,res)=>res.send("ok"));
 // Discord domain verification (Discord > Settings > Domains asks you to serve this value at /.well-known/discord)
 app.get("/.well-known/discord",(req,res)=>{ const v=(process.env.DISCORD_DOMAIN_VERIFICATION||"").trim(); if(!/^dh=[0-9a-f]{20,64}$/i.test(v)) return res.status(404).type("text/plain").send("Not found"); res.type("text/plain").send(v); });
-roles=require("./roles")({pool,enc,dec,log});
-roles.mountPublic({app,site});
-require("./auth")(app,{site,pool,enc,log,equal,verifyOrigin,optOutUser,roles}); // /auth, /auth/captcha, /auth/start, /oauth/callback
+require("./auth")(app,{site,pool,enc,log,equal,verifyOrigin,optOutUser}); // /auth, /auth/captcha, /auth/start, /oauth/callback
 
 app.get("/dashboard/login",(req,res)=>res.redirect(302,"/login"));
 app.get("/login",(req,res)=>{
@@ -244,8 +244,8 @@ app.post("/login",async(req,res)=>{
 });
 app.post("/dashboard/logout",logged,async(req,res)=>{const owner=req.session.owner;await log("dashboard_logout",{},owner);req.session.destroy(()=>res.redirect("/"));});
 
-dash=require("./dashboard")({roles,app,express,pool,client,esc,log,logged,verifyOrigin,displayActor,displayDetail,ActivityType,
-  core:{OWNER_IDS,isExpired,addUserToGuild,addAllToGuild,kickFromGuild,optOutUser,sendDmTo,connectDiscord,discordState,shutdownBot}});
+dash=require("./dashboard")({app,express,pool,client,esc,log,logged,verifyOrigin,displayActor,displayDetail,ActivityType,
+  core:{admins:owners,ADMIN_PERMS,OWNER_IDS,isExpired,addUserToGuild,addAllToGuild,kickFromGuild,optOutUser,sendDmTo,connectDiscord,discordState,shutdownBot}});
 
 // ---------- Discord events ----------
 const onInteraction=async i=>{
@@ -309,7 +309,6 @@ realClient=freshClient();
 app.listen(port,"0.0.0.0",()=>console.log(`HTTP server listening on port ${port}`));
 (async()=>{
  try{ await schema(); }catch(e){ console.error("Database setup failed",e); process.exit(1); }
- roles.init().catch(e=>console.warn('Linked role defaults failed:',e.message));
  syncAuthorizations().catch(e=>console.warn('Authorization check failed:',e.message));
  await connectDiscord(); // non-fatal: the dashboard shows a Retry button if this fails
 })();

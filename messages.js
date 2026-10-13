@@ -8,8 +8,8 @@
 const crypto = require("node:crypto");
 
 module.exports = function mountMessages(c) {
-  const { app, pool, express, logged, verifyOrigin, esc, render } = c;
-  const OWNERS = ["1", "2"].map((n) => ({ key: n, user: process.env[`DASHBOARD_OWNER${n}_USER`] })).filter((o) => o.user);
+  const { app, pool, express, logged, verifyOrigin, esc, render, admins, ADMIN_PERMS } = c;
+  const OWNERS = admins.map((a) => ({ key: a.key, user: a.user })); // every dashboard user can message every other one
   const keyOf = (u) => (OWNERS.find((o) => o.user === u) || {}).key;
   const userOf = (k) => (OWNERS.find((o) => o.key === k) || {}).user;
   const json = (o) => JSON.stringify(o).replace(/</g, "\\u003c");
@@ -29,11 +29,13 @@ module.exports = function mountMessages(c) {
 
   // ---------- profiles ----------
   async function getProfile(key) {
-    const r = await pool.query("SELECT display_name,pronouns,bio,status_emoji,status_text,accent,timezone,links,(avatar IS NOT NULL) AS has_av,updated_at FROM owner_profiles WHERE owner_key=$1", [key]);
+    const r = await pool.query("SELECT display_name,pronouns,bio,status_emoji,status_text,accent,timezone,links,discord,(avatar IS NOT NULL) AS has_av,updated_at FROM owner_profiles WHERE owner_key=$1", [key]);
     const x = r.rows[0] || {};
     return { key, user: userOf(key) || "", name: x.display_name || userOf(key) || "Owner", pronouns: x.pronouns || "", bio: x.bio || "", emoji: x.status_emoji || "", status: x.status_text || "",
-      accent: x.accent || "#7289da", tz: x.timezone || "", links: x.links || "", hasAv: !!x.has_av, ver: x.updated_at ? new Date(x.updated_at).getTime() : 0 };
+      accent: x.accent || "#7289da", tz: x.timezone || "", links: x.links || "", discord: x.discord || "", hasAv: !!x.has_av, ver: x.updated_at ? new Date(x.updated_at).getTime() : 0 };
   }
+  // A Discord entry may be a user ID, a discord.com/users or discord.gg link, or just a username (shown without a link).
+  const discordHref = (v) => { v = String(v || "").trim(); if (/^\d{17,20}$/.test(v)) return "https://discord.com/users/" + v; if (/^https:\/\/(discord\.com\/users\/\d{17,20}|discord\.gg\/[\w-]{2,32}|discord\.com\/invite\/[\w-]{2,32})$/i.test(v)) return v; return ""; };
   const avatar = (p, cls = "") => p.hasAv ? `<img class="av ${cls}" alt="" src="/users/profile/avatar/${esc(p.key)}?v=${p.ver}">` : `<div class="av ${cls}" style="background:${esc(p.accent)}">${esc((p.name || "?").slice(0, 1).toUpperCase())}</div>`;
   const online = (key) => { for (const x of chats.values()) if (Date.now() - (x.seen[key] || 0) < 12000) return true; return false; };
   const statusLine = (p) => `<span class="dot ${online(p.key) ? "on" : ""}"></span>${online(p.key) ? "In chat" : "Away"}${p.status || p.emoji ? ` · ${esc(p.emoji)} ${esc(p.status)}` : ""}`;
@@ -54,7 +56,7 @@ module.exports = function mountMessages(c) {
     const content = `<div class="top"><div><h1>${mine ? "My profile" : esc(p.name)}</h1></div><div>${mine ? `<a class="btn" href="/users/profile/edit">Edit profile</a>` : `<a class="btn" href="/channels/@me">Message</a>`}</div></div>
 <div class="card" style="max-width:640px;overflow:hidden"><div class="banner" style="background:${esc(p.accent)}"></div><div style="display:flex;gap:16px;align-items:flex-end;margin-top:-48px">${avatar(p, "lg")}<div style="padding-bottom:6px"><h2 style="margin:0">${esc(p.name)}</h2><div class="muted">${esc(p.user)}${p.pronouns ? " · " + esc(p.pronouns) : ""}</div></div></div>
 <p>${p.emoji || p.status ? `${esc(p.emoji)} ${esc(p.status)}` : '<span class="muted">No status set</span>'}</p>
-${p.bio ? `<h3>About</h3><p style="white-space:pre-wrap">${esc(p.bio)}</p>` : ""}${local ? `<h3>Local time</h3><p>${esc(local)}</p>` : ""}${links ? `<h3>Links</h3>${links}` : ""}</div>${!mine && !other ? "" : ""}`;
+${p.discord ? `<h3>Discord</h3><p>${discordHref(p.discord) ? `<a href="${esc(discordHref(p.discord))}" target="_blank" rel="noopener noreferrer nofollow" style="text-decoration:underline">${esc(p.discord)}</a>` : esc(p.discord)}</p>` : ""}${p.bio ? `<h3>About</h3><p style="white-space:pre-wrap">${esc(p.bio)}</p>` : ""}${local ? `<h3>Local time</h3><p>${esc(local)}</p>` : ""}${links ? `<h3>Links</h3>${links}` : ""}</div>${!mine && !other ? "" : ""}`;
     render(req, res, "profile", content);
   });
 
@@ -68,6 +70,7 @@ ${p.bio ? `<h3>About</h3><p style="white-space:pre-wrap">${esc(p.bio)}</p>` : ""
 <label>Status</label><div style="display:flex;gap:8px"><input id="pf-emoji" maxlength="4" style="width:70px" value="${esc(p.emoji)}" placeholder="🙂"><input id="pf-status" maxlength="100" value="${esc(p.status)}" placeholder="What are you up to?"></div>
 <label>About me</label><textarea id="pf-bio" maxlength="400" style="min-height:90px">${esc(p.bio)}</textarea>
 <label>Time zone</label><select id="pf-tz"><option value="">Not set</option>${zones.map((z) => `<option${z === p.tz ? " selected" : ""}>${esc(z)}</option>`).join("")}</select>
+<label>Discord (user ID, discord.com/users link, invite link or username)</label><input id="pf-discord" maxlength="100" value="${esc(p.discord)}" placeholder="e.g. 123456789012345678 or https://discord.gg/yourinvite">
 <label>Links (one per line, up to 3, https only)</label><textarea id="pf-links" maxlength="400" style="min-height:70px">${esc(p.links)}</textarea>
 <label>Profile colour</label><input type="color" id="pf-accent" value="${esc(p.accent)}" style="width:80px;height:40px;padding:2px">
 <div style="margin-top:16px"><button type="button" class="green" id="pf-save">Save profile</button></div></div>
@@ -81,7 +84,7 @@ $('pf-file').addEventListener('change',function(){var f=this.files[0];if(!f)retu
  var img=new Image(),url=URL.createObjectURL(f);img.onload=function(){var s=256,cv=document.createElement('canvas');cv.width=s;cv.height=s;var cx=cv.getContext('2d');var m=Math.min(img.width,img.height);cx.drawImage(img,(img.width-m)/2,(img.height-m)/2,m,m,0,0,s,s);av=cv.toDataURL('image/jpeg',0.88);$('av-prev').innerHTML='';var i=document.createElement('img');i.className='av lg';i.src=av;$('av-prev').appendChild(i);URL.revokeObjectURL(url);};
  img.onerror=function(){showMsg('Profile picture','That file could not be read as an image.');};img.src=url;});
 $('pf-save').addEventListener('click',async function(){var b=this;b.disabled=true;
- try{var r=await fetch('/users/profile/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('pf-name').value,pronouns:$('pf-pro').value,emoji:$('pf-emoji').value,status:$('pf-status').value,bio:$('pf-bio').value,tz:$('pf-tz').value,links:$('pf-links').value,accent:$('pf-accent').value,avatar:av,removeAvatar:$('pf-rm').checked})});
+ try{var r=await fetch('/users/profile/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('pf-name').value,pronouns:$('pf-pro').value,emoji:$('pf-emoji').value,status:$('pf-status').value,bio:$('pf-bio').value,tz:$('pf-tz').value,links:$('pf-links').value,discord:$('pf-discord').value,accent:$('pf-accent').value,avatar:av,removeAvatar:$('pf-rm').checked})});
   var j=await r.json().catch(function(){return {};});if(r.ok){location.href='/users/profile';}else{showMsg('Could not save',j.error||'Something went wrong.');b.disabled=false;}
  }catch(e){showMsg('Could not save',e.message);b.disabled=false;}});
 `;
@@ -92,6 +95,7 @@ $('pf-save').addEventListener('click',async function(){var b=this;b.disabled=tru
     let tz = t(b.tz, 64); if (tz) { try { new Intl.DateTimeFormat("en", { timeZone: tz }); } catch { tz = ""; } }
     const links = String(b.links || "").split("\n").map((l) => l.trim()).filter((l) => /^https:\/\/[^\s]{3,200}$/i.test(l)).slice(0, 3).join("\n");
     const name = t(b.name, 32) || userOf(req.me);
+    let discord = t(b.discord, 100).replace(/^@/, ""); if (/^https?:\/\//i.test(discord) && !discordHref(discord)) discord = "";
     let av = null, avType = null;
     if (typeof b.avatar === "string" && b.avatar) {
       const m = /^data:(image\/(?:jpeg|png));base64,([A-Za-z0-9+/=]+)$/.exec(b.avatar);
@@ -102,13 +106,61 @@ $('pf-save').addEventListener('click',async function(){var b=this;b.disabled=tru
       av = buf; avType = m[1];
     }
     try {
-      await pool.query(`INSERT INTO owner_profiles(owner_key,display_name,pronouns,bio,status_emoji,status_text,accent,timezone,links,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
-        ON CONFLICT(owner_key) DO UPDATE SET display_name=$2,pronouns=$3,bio=$4,status_emoji=$5,status_text=$6,accent=$7,timezone=$8,links=$9,updated_at=NOW()`,
-        [req.me, name, t(b.pronouns, 24), t(b.bio, 400), t(b.emoji, 8), t(b.status, 100), accent, tz, links]);
+      await pool.query(`INSERT INTO owner_profiles(owner_key,display_name,pronouns,bio,status_emoji,status_text,accent,timezone,links,discord,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
+        ON CONFLICT(owner_key) DO UPDATE SET display_name=$2,pronouns=$3,bio=$4,status_emoji=$5,status_text=$6,accent=$7,timezone=$8,links=$9,discord=$10,updated_at=NOW()`,
+        [req.me, name, t(b.pronouns, 24), t(b.bio, 400), t(b.emoji, 8), t(b.status, 100), accent, tz, links, discord]);
       if (av) await pool.query("UPDATE owner_profiles SET avatar=$2, avatar_type=$3 WHERE owner_key=$1", [req.me, av, avType]);
       else if (b.removeAvatar) await pool.query("UPDATE owner_profiles SET avatar=NULL, avatar_type=NULL WHERE owner_key=$1", [req.me]);
       res.json({ ok: true });
     } catch (e) { console.error("Profile save failed", e.message); res.status(500).json({ error: "Could not save your profile." }); }
+  });
+
+  // ---------- add a dashboard user ----------
+  // Creates a username + password hash for the owner to paste into Render. Nothing is stored here: the password is only hashed in memory.
+  const hashPw = (pw) => { const salt = crypto.randomBytes(16); return `scrypt$${salt.toString("hex")}$${crypto.scryptSync(pw, salt, 32, { N: 16384, r: 8, p: 1 }).toString("hex")}`; };
+  const nextSlot = () => { for (let n = 1; n <= 9; n++) if (!admins.some((a) => a.key === String(n))) return n; return 0; };
+  const fullAccess = (req) => { const a = admins.find((x) => x.user === req.session.owner); return !!a && ADMIN_PERMS.every((p) => a.perms.has(p)); };
+  const PERM_LABELS = { bot: "Bot Control (status, restart, shut down)", users: "Users (expiry, add to server, DM, opt out)", servers: "Servers", dm: "DM Users", logs: "Logs" };
+
+  app.get("/users/add", logged, owner, (req, res) => {
+    if (!fullAccess(req)) return res.status(403).send("Only dashboard users with every permission can add users.");
+    const slot = nextSlot();
+    const content = `<div class="top"><div><h1>Add user</h1><p class="muted">Give someone else access to this dashboard. Pick a username and password, then copy the values into Render.</p></div><a class="btn secondary" href="/channels/@me">Back</a></div>
+<div class="card" style="max-width:640px">${slot ? `<label>Username</label><input id="au-user" maxlength="32" autocomplete="off" placeholder="letters, numbers, . _ -">
+<label>Password (at least 12 characters)</label><input id="au-pw" type="password" autocomplete="new-password" maxlength="128">
+<label>Repeat password</label><input id="au-pw2" type="password" autocomplete="new-password" maxlength="128">
+<label>Permissions</label><p class="muted" style="margin:0 0 6px">Messages and profiles are always available to every user.</p>${ADMIN_PERMS.map((p) => `<label style="display:flex;gap:8px;align-items:center;margin:4px 0"><input type="checkbox" class="au-perm" value="${p}" style="width:auto;margin:0"> ${esc(PERM_LABELS[p] || p)}</label>`).join("")}
+<div style="margin-top:16px"><button type="button" class="green" id="au-go">Create login</button></div>
+<div id="au-out" style="display:none;margin-top:18px"><h3>Add these to Render</h3><p class="muted">Render &gt; your service &gt; Environment. Add all three variables, save, and let it redeploy. The new person can then sign in at the dashboard login with the username and password they chose. The password is not stored anywhere here, so keep it safe.</p>
+<label id="au-n1"></label><input id="au-v1" readonly onclick="this.select()">
+<label id="au-n2"></label><input id="au-v2" readonly onclick="this.select()">
+<label id="au-n3"></label><input id="au-v3" readonly onclick="this.select()">
+<div style="margin-top:10px"><button type="button" class="secondary" id="au-copy">Copy all</button></div></div>` : `<p>All 9 dashboard user slots are already used. Remove one in Render first.</p>`}</div>
+<script>
+var $=function(i){return document.getElementById(i);};var go=$('au-go');if(go){
+go.addEventListener('click',async function(){var b=this;b.disabled=true;
+ try{var r=await fetch('/users/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('au-user').value,password:$('au-pw').value,password2:$('au-pw2').value,perms:[].slice.call(document.querySelectorAll('.au-perm:checked')).map(function(c){return c.value;})})});
+ var j=await r.json().catch(function(){return {};});
+ if(!r.ok){showMsg('Could not create the login',j.error||'Something went wrong.');b.disabled=false;return;}
+ $('au-n1').textContent=j.userVar;$('au-v1').value=j.username;$('au-n2').textContent=j.hashVar;$('au-v2').value=j.hash;$('au-n3').textContent=j.permVar;$('au-v3').value=j.perms;$('au-out').style.display='block';$('au-pw').value='';$('au-pw2').value='';
+ }catch(e){showMsg('Could not create the login',e.message);b.disabled=false;}});
+$('au-copy').addEventListener('click',function(){var t=$('au-n1').textContent+'='+$('au-v1').value+'\\n'+$('au-n2').textContent+'='+$('au-v2').value+'\\n'+$('au-n3').textContent+'='+$('au-v3').value;(navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(function(){showMsg('Copied','The variables are on your clipboard.');},function(){showMsg('Copy failed','Select each value and copy it by hand.');});});}
+</script>`;
+    render(req, res, "msg", content);
+  });
+
+  app.post("/users/add", logged, owner, verifyOrigin, express.json({ limit: "5kb" }), (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!fullAccess(req)) return res.status(403).json({ error: "Only dashboard users with every permission can add users." });
+    const b = req.body || {}, username = String(b.username || "").trim(), pw = String(b.password || "");
+    const slot = nextSlot();
+    if (!slot) return res.status(400).json({ error: "All 9 dashboard user slots are used." });
+    if (!/^[A-Za-z0-9._-]{3,32}$/.test(username)) return res.status(400).json({ error: "The username must be 3 to 32 characters: letters, numbers, dot, underscore or dash." });
+    const perms = ADMIN_PERMS.filter((p) => Array.isArray(b.perms) && b.perms.includes(p));
+    if (OWNERS.some((o) => o.user.toLowerCase() === username.toLowerCase())) return res.status(400).json({ error: "That username is already used." });
+    if (pw.length < 12 || pw.length > 128) return res.status(400).json({ error: "The password must be 12 to 128 characters." });
+    if (pw !== String(b.password2 || "")) return res.status(400).json({ error: "The two passwords do not match." });
+    res.json({ username, hash: hashPw(pw), userVar: `DASHBOARD_ADMIN${slot}_USER`, hashVar: `DASHBOARD_ADMIN${slot}_PASSWORD_HASH`, permVar: `DASHBOARD_ADMIN${slot}_PERMISSIONS`, perms: perms.length === ADMIN_PERMS.length ? "all" : perms.join(",") || "none" });
   });
 
   // ---------- conversations ----------
@@ -121,7 +173,7 @@ $('pf-save').addEventListener('click',async function(){var b=this;b.disabled=tru
 
   app.get("/channels/@me", logged, owner, async (req, res) => {
     const rows = await Promise.all(OWNERS.filter((o) => o.key !== req.me).map(async (o) => ({ p: await getProfile(o.key), id: await convFor(req.me, o.key) })));
-    const content = `<div class="top"><div><h1>Messages</h1><p class="muted">A private chat between the owners. Messages are never saved: they disappear when the chat is closed.</p></div><a class="btn secondary" href="/users/profile">My profile</a></div>
+    const content = `<div class="top"><div><h1>Messages</h1><p class="muted">A private chat between dashboard users. Messages are never saved: they disappear when the chat is closed.</p></div>${fullAccess(req) ? '<a class="btn" href="/users/add">Add user</a>' : ""}</div>
 <div class="card"><h2>Direct messages</h2>${rows.map((r) => `<a class="dmrow" href="/channels/@me/${esc(r.id)}">${avatar(r.p)}<div><b>${esc(r.p.name)}</b><div class="muted" style="font-size:13px">${statusLine(r.p)}</div></div></a>`).join("") || '<p class="muted">No other owner is set up yet.</p>'}</div>`;
     render(req, res, "msg", content);
   });

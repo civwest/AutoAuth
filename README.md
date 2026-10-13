@@ -25,7 +25,6 @@ No IDs, names, links or invite URLs live in the code. Everything personal comes 
 5. **Installation tab:** enable **User Install** (needed for the DM authorization option) and **Guild Install**.
 6. Optionally restrict who can add the bot: untick **Public Bot** on the Bot tab.
 
-**Linked Roles (optional):** in the Developer Portal open **General Information** and set **Linked Roles Verification URL** to `https://YOUR-SITE/linked-role`. Then open the dashboard's **Linked Roles** tab, add up to 5 requirements and press **Refresh**. Requirement types: **Manual** (you switch it on per person), **Auto: AutoAuth status** (server joins, DMs, or N days authorized) and **Auto: connected Twitch account** (has a Twitch account, follows a channel, or is subscribed to a channel). In your server add them under Server Settings > Roles > (a role) > Links. Members connect once; they do not have to authorize AutoAuth. Twitch requirements need the Twitch app below.
 
 ## 3. Render setup
 
@@ -48,13 +47,14 @@ No IDs, names, links or invite URLs live in the code. Everything personal comes 
 | `DATABASE_URL` | Render PostgreSQL > Connections > Internal Database URL |
 | `TOKEN_ENCRYPTION_KEY` | 64 hex characters. Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. **Never change it later or saved tokens become unreadable.** |
 | `SESSION_SECRET` | Any long random string (also signs auth links and captchas). Changing it invalidates in-flight sign-ins. |
-| `DASHBOARD_OWNER1_USER` / `DASHBOARD_OWNER2_USER` | Dashboard usernames you choose. |
-| `DASHBOARD_OWNER1_PASSWORD_HASH` / `DASHBOARD_OWNER2_PASSWORD_HASH` | scrypt hash in the form `scrypt$<saltHex>$<hashHex>`. See "Dashboard passwords and hashes" below. |
-| `OWNER1_DISCORD_ID` / `OWNER2_DISCORD_ID` | Discord user IDs of the two owners (Discord > Settings > Advanced > Developer Mode, then right-click your profile > Copy User ID). Kick-all skips these users and Logs shows them by name. |
-| `OWNER1_NAME` / `OWNER2_NAME` | Display names for those owners in Logs. |
+| `DASHBOARD_ADMIN1_USER` | Username for the first dashboard login (you choose it, 3 to 32 letters, numbers, `.`, `_` or `-`). See "Dashboard logins" below. |
+| `DASHBOARD_ADMIN1_PASSWORD_HASH` | The scrypt hash of that login's password (`scrypt$<salt>$<hash>`). See "Dashboard logins" below. |
+| `DASHBOARD_ADMIN1_PERMISSIONS` | What that login may use: `all`, `none`, or a comma list of `bot,users,servers,dm,logs`. Leave it out and the login can only use Messages. Give at least one login `all`. |
+| `DASHBOARD_ADMIN2_USER`, `DASHBOARD_ADMIN2_PASSWORD_HASH`, `DASHBOARD_ADMIN2_PERMISSIONS` | Optional second login. Same three variables, repeated up to `DASHBOARD_ADMIN9_*`. None are required; no login exists unless you add its variables. |
+| `OWNER1_DISCORD_ID` / `OWNER2_DISCORD_ID` (optional, up to `OWNER9_`) | Discord user IDs of the owners (Discord > Settings > Advanced > Developer Mode, then right-click your profile > Copy User ID). Kick-all skips these users and Logs shows them by name. |
+| `OWNER1_NAME` / `OWNER2_NAME` (optional, same numbers) | Display names for those owners in Logs. |
 | `SITE_OPERATOR` | Name shown in the legal pages and footer as the person running the site (e.g. `Jane Doe`). Defaults to "the site owner". |
 | `LINK_DOCS` | URL opened by the Documentation tab (e.g. your GitHub repo). Hidden if unset. |
-| `TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET` | Optional, only for Twitch requirements. Create an app at https://dev.twitch.tv/console and add the OAuth Redirect URL `https://YOUR-SITE/twitch/callback`. Client ID and Secret go here. |
 | `LINK_TIKTOK`, `LINK_YOUTUBE`, `LINK_X`, `LINK_TWITCH`, `LINK_DISCORD` | Footer "Follow the creator" links (`LINK_DISCORD` = your server invite). Each icon is hidden if unset. |
 | `DATABASE_SSL` | Optional. Set to `disable` only for a local database. |
 | `DM_RETENTION_DAYS` | Optional. How many days stored DM chats are kept before automatic deletion (default `30`; `0` keeps them until deleted). |
@@ -62,7 +62,19 @@ No IDs, names, links or invite URLs live in the code. Everything personal comes 
 | `GOOGLE_VERIFICATION_FILE` | Optional (not needed if you verified by DNS). The name of Google's verification file (e.g. `google1234abcd.html`); the site serves it at that path. |
 | `GOOGLE_SITE_VERIFICATION` | Optional. The meta-tag content value, as an alternative to the file. |
 
-**Dashboard passwords and hashes.** Each owner needs a password and a matching password hash. You type the password to log in; Render only stores the hash. The easiest way: ask your favorite AI (ChatGPT, Claude, Gemini, etc.) for **2 random passwords and their password hashes** in this format: `scrypt$<saltHex>$<hashHex>` (scrypt, N=16384, r=8, p=1, 32-byte key). Save the passwords somewhere safe, and put each hash into `DASHBOARD_OWNER1_PASSWORD_HASH` and `DASHBOARD_OWNER2_PASSWORD_HASH` in Render.
+### Dashboard logins
+
+Nothing is premade. To get into the dashboard, add these three variables in Render (example for the first login):
+
+```
+DASHBOARD_ADMIN1_USER=jane
+DASHBOARD_ADMIN1_PASSWORD_HASH=scrypt$<salt>$<hash>
+DASHBOARD_ADMIN1_PERMISSIONS=all
+```
+
+Each login uses its own number (`ADMIN1`, `ADMIN2`, ... `ADMIN9`) and needs all three variables. Permission words: `bot` = Bot Control, `users` = Users, `servers` = Servers, `dm` = DM Users, `logs` = Logs. Messages and profiles are open to every login.
+
+**Dashboard passwords and hashes.** Each login needs a password and a matching password hash. You type the password to log in; Render only stores the hash. The easiest way: ask your favorite AI (ChatGPT, Claude, Gemini, etc.) for **a random password and its password hash for each login** in this format: `scrypt$<saltHex>$<hashHex>` (scrypt, N=16384, r=8, p=1, 32-byte key). Save the passwords somewhere safe, and put each hash into that login's `DASHBOARD_ADMINn_PASSWORD_HASH` in Render.
 
 If you would rather generate one yourself, run this (replace `YOUR_PASSWORD`):
 
@@ -91,8 +103,6 @@ Keep real passwords, tokens and hashes out of GitHub.
 | `/channels/<server-id>/<userid>`, `/channels/@dm/<userid>` | Owner view of one DM chat with a person (server id = a server they share with the bot) |
 | `/channels/@me`, `/channels/@me/<id>` | Owner-only private chat (no Discord connection needed). Messages are kept in memory only and cleared when the chat is closed. |
 | `/users/profile`, `/users/profile/edit` | Owner profiles (picture, name, pronouns, status, about, time zone, links, colour) |
-| `/twitch/callback` | Twitch sign-in return (Linked Roles Twitch requirements) |
-| `/linked-role` | Linked Roles Verification URL (members connect here from Discord) |
 | `/.well-known/discord` | Discord domain verification (set `DISCORD_DOMAIN_VERIFICATION`) |
 | `/health` | Plain health check |
 
@@ -109,3 +119,6 @@ Keep real passwords, tokens and hashes out of GitHub.
 - DMs only arrive if the user's Discord privacy settings allow them.
 - The built-in captcha is basic. Cloudflare Turnstile or hCaptcha can be added later.
 - Dashboard sessions are stored in PostgreSQL and expire after 2 hours.
+
+
+**Adding more dashboard users:** open Messages > **Add user** (`/users/add`, only for users with every permission). Type a username and password and tick what they may use (Bot Control, Users, Servers, DM Users, Logs). The page shows the three Render variables to add: `DASHBOARD_ADMINn_USER`, `DASHBOARD_ADMINn_PASSWORD_HASH` and `DASHBOARD_ADMINn_PERMISSIONS` (`all`, `none` or a list like `bot,logs`). Save them in Render and let it redeploy. Every dashboard user can use Messages and message every other user. The password is never stored.

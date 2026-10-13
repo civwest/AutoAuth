@@ -120,3 +120,22 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 - No Twitch Partner/Affiliate rules and no default Partner/Affiliate roles any more.
 - Needs `TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET` and the Twitch redirect URL `https://YOUR-SITE/twitch/callback`. New table `twitch_links` (tokens encrypted); `role_defs` gains `rule_text`, `rule_id`. Twitch data is deleted when a member opts out of everything.
 - Web opt-out now works for people who only connected Linked Roles. Privacy Policy updated for Twitch.
+
+## v1.4.1
+- **Linked Roles removed** (tab, `/linked-role`, Twitch requirements, `/twitch/callback`). The old `role_links`, `role_defs`, `role_assign` and `twitch_links` tables are dropped on start, which deletes the stored Linked Roles/Twitch tokens. You can clear the Linked Roles Verification URL in the Developer Portal and delete the Twitch app and `TWITCH_*` variables.
+- **Messages > Add user** (replaces the My profile button; your profile is still under "Signed in as"). Choose a username and password and the page gives you the Render variables to add (`DASHBOARD_OWNERn_USER` and `DASHBOARD_OWNERn_PASSWORD_HASH`) to grant another person dashboard access. Up to 9 dashboard users.
+- **Profiles:** new Discord field (user ID, discord.com/users link, invite link or username), shown as a link on the profile.
+
+## v1.4.2
+- **Dashboard users are now `DASHBOARD_ADMINn_*`** (old `DASHBOARD_OWNERn_*` names still work). New `DASHBOARD_ADMINn_PERMISSIONS` (`all`, `none`, or a list of `bot,users,servers,dm,logs`). Admins 1 and 2 default to all; later ones to Messages only. Tabs and routes a user may not use are hidden and blocked.
+- **Add user** (Messages) now has a permissions picker and outputs the three variables. It was also fixed: its script had a syntax error that stopped the page working. Only users with every permission see it.
+- **Messages:** every dashboard user can message every other one.
+- **User menu and Quick actions fixed** (Edit expiry, Add to server, DM, Opt out, Add/Remove/Opt out quick actions): a script error on the page stopped the buttons.
+- **Status editor:** *None* now sets a status message only. New *Streaming* option: the message box disappears, the button turns green and says *Continue*, and a form asks for the Twitch URL and stream title; *Verify stream* checks the channel and shows its live thumbnail, then *Set status*. Saving no longer reloads the page; a green banner confirms, e.g. "Set the bot's status to Online: Listening to AutoAuth." Note: Discord does not let bots attach their own image to a status; Discord itself shows the Twitch preview on a streaming status.
+
+## v1.4.3
+- Only `DASHBOARD_ADMIN1_*` is required now. Admins 1 and 2 only default to every permission when `DASHBOARD_ADMINn_PERMISSIONS` is not set; set it (e.g. `bot,logs` or `none`) to limit them too.
+
+## v1.4.4
+- **No premade logins.** No dashboard login is required and none gets default access. A login exists only if its `DASHBOARD_ADMINn_USER` and `_PASSWORD_HASH` are set, and `DASHBOARD_ADMINn_PERMISSIONS` decides what it may use (`all`, `none` or a list; if left out, Messages only). Set `all` on at least one login to use Add user.
+- README: every dashboard login variable is now listed explicitly with an example and the permission words.

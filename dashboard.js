@@ -1,7 +1,7 @@
 // Owner dashboard: Bot Control, Database, DM Users, Logs.
 module.exports = function mountDashboard(c) {
-  const { roles, app, express, pool, client, esc, log, logged, verifyOrigin, displayActor, displayDetail, ActivityType, core } = c;
-  const { OWNER_IDS, isExpired, addUserToGuild, addAllToGuild, kickFromGuild, optOutUser, sendDmTo, connectDiscord, discordState, shutdownBot } = core;
+  const { app, express, pool, client, esc, log, logged, verifyOrigin, displayActor, displayDetail, ActivityType, core } = c;
+  const { admins, ADMIN_PERMS, OWNER_IDS, isExpired, addUserToGuild, addAllToGuild, kickFromGuild, optOutUser, sendDmTo, connectDiscord, discordState, shutdownBot } = core;
 
   const EXPIRY = [["30m", "30 minutes"], ["1h", "1 hour"], ["6h", "6 hours"], ["12h", "12 hours"], ["1d", "1 day"], ["7d", "7 days"], ["30d", "30 days"], ["never", "Never"]];
   const INTERVALS = { "30m": "30 minutes", "1h": "1 hour", "6h": "6 hours", "12h": "12 hours", "1d": "1 day", "7d": "7 days", "30d": "30 days" };
@@ -16,6 +16,7 @@ module.exports = function mountDashboard(c) {
  .card.lk{position:relative;min-height:150px;background:rgba(140,148,160,.22);border-color:rgba(140,148,160,.35)}.card.lk>*:not(.ov){pointer-events:none;filter:grayscale(1);opacity:.35;user-select:none}.ov{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:12px;text-align:center;border-radius:13px;background:rgba(13,17,23,.5);z-index:2}.ov p{margin:0;font-weight:650}.ov form{margin:0}.ov button{padding:8px 16px}.flash-dlg p{margin:12px 0 4px;white-space:pre-wrap}
  .chat{display:flex;flex-direction:column;height:calc(100vh - 150px);min-height:380px}.msgs{flex:1;overflow-y:auto;padding:6px 2px}.msg{display:flex;gap:10px;margin:12px 0;align-items:flex-start}.msg .av{flex-shrink:0}.msg .who{font-weight:700;margin-right:8px}.msg .when{color:var(--muted);font-size:12px}.msg .txt{white-space:pre-wrap;word-break:break-word}.av{width:40px;height:40px;border-radius:50%;background:#222a35;object-fit:cover;display:flex;align-items:center;justify-content:center;font-weight:800;color:white;overflow:hidden}.av.lg{width:96px;height:96px;font-size:34px}.composer{display:flex;gap:10px;margin-top:10px}.composer textarea{flex:1;min-height:46px;max-height:140px;resize:vertical}.dmrow{display:flex;align-items:center;gap:12px;padding:12px;border-radius:10px;border:1px solid var(--line);margin:8px 0;background:#11161d}.dmrow:hover{background:#1a2230}.banner{height:90px;border-radius:12px 12px 0 0;margin:-18px -18px 0}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#6b7280;margin-right:6px}.dot.on{background:#3ba55d}
  .acts{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}td.actcell{text-align:right;min-width:230px;max-width:430px}.acts button{padding:8px 12px}.badge{display:inline-block;border-radius:20px;padding:2px 9px;font-size:12px;background:#263c2c;color:#7ee787;margin:0 4px 4px 0}.badge.dm{background:#1f2f4d;color:#8fb4ff}.badge.none{background:#3c2528;color:#ff938a}.dm-status{margin-top:10px}
+ #toast{position:fixed;top:16px;left:50%;transform:translate(-50%,-140px);background:#1f6f43;color:#fff;padding:12px 22px;border-radius:10px;z-index:200;transition:transform .25s;box-shadow:0 6px 24px rgba(0,0,0,.45);max-width:90vw;text-align:center;font-weight:650}#toast.show{transform:translate(-50%,0)}#toast.bad{background:#8c2f39}.stprev{max-width:100%;border-radius:10px;margin-top:10px;display:block}
  @media(max-width:700px){.layout{display:block}.side{position:static;height:auto;width:auto;border-right:0;border-bottom:1px solid var(--line)}.nav{display:flex;flex-wrap:wrap}.nav a{padding:9px}.brand{padding-bottom:10px}main{padding:15px}}`;
 
   // Client-side helpers (no template literals on purpose, this string is embedded in a template).
@@ -73,6 +74,19 @@ function openExpiry(id){
  $('ex-current').textContent=u.auth_expires_at?('Current expiry: '+new Date(u.auth_expires_at).toUTCString()):'Current: never expires (until the user opts out).';
  $('ex-select').value='never';closeAll();openDlg('dlg-expiry');
 }
+function toast(m,bad){var t=$('toast');t.textContent=m;t.className='show'+(bad?' bad':'');clearTimeout(window.__tt);window.__tt=setTimeout(function(){t.className='';},5000);}
+function actChange(){var s=$('pr-kind').value==='Streaming';$('pr-textwrap').style.display=s?'none':'';var b=$('pr-btn');b.textContent=s?'Continue':'Set status';b.className=s?'green':'';}
+async function sendPresence(body){try{var r=await fetch('/dashboard/presence',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});var j=await r.json().catch(function(){return {};});if(r.ok){toast(j.message||'Status updated.');return true;}toast(j.error||'Could not set the status.',true);}catch(e){toast('Request failed: '+e.message,true);}return false;}
+function presenceSubmit(ev){ev.preventDefault();var kind=$('pr-kind').value;if(kind==='Streaming'){$('st-note').textContent='';$('st-img').style.display='none';$('st-set').disabled=true;openDlg('dlg-stream');return false;}sendPresence({status:$('pr-status').value,kind:kind,text:$('pr-text').value});return false;}
+var stVerified='';
+async function streamVerify(){var url=$('st-url').value.trim(),title=$('st-title').value.trim(),n=$('st-note'),img=$('st-img'),b=$('st-verify');stVerified='';$('st-set').disabled=true;img.style.display='none';
+ if(!url||!title){n.textContent='Enter the Twitch URL and a stream title.';return;}
+ b.disabled=true;n.textContent='Checking the stream…';
+ try{var r=await fetch('/dashboard/presence/verify-stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:url})});var j=await r.json().catch(function(){return {};});
+  if(!r.ok){n.textContent=j.error||'Could not verify.';}
+  else{stVerified=j.url;if(j.thumb){img.src=j.thumb;img.style.display='block';n.textContent='Verified: '+j.login+' is live. Discord will show this stream preview on the status.';}else{n.textContent='The channel '+j.login+' is not live right now, so there is no thumbnail yet. Discord shows the preview as soon as it goes live. You can still set the status.';}$('st-set').disabled=false;}
+ }catch(e){n.textContent='Request failed: '+e.message;}b.disabled=false;}
+async function streamSet(){if(!stVerified)return;var ok=await sendPresence({status:$('pr-status').value,kind:'Streaming',url:stVerified,title:$('st-title').value.trim()});if(ok)closeAll();}
 function showMsg(t,m){$('msg-title').textContent=t;$('msg-text').textContent=m;closeAll();openDlg('dlg-msg');}
 var dmIds=[];
 function openDm(ids,label){dmIds=ids;$('dm-title').textContent='Send a DM to '+label;$('dm-msg').value='';$('dm-files').value='';$('dm-status').textContent='';closeAll();openDlg('dlg-dm');}
@@ -89,7 +103,7 @@ async function dmSend(ids,msgId,filesId,statusId,btnId){
   var j=await res.json().catch(function(){return {error:'Unexpected response (are you still signed in?)'};});
   if(!res.ok){st.textContent=j.error||'Failed';}
   else if(j.failed===0){st.textContent='';$(msgId).value='';$(filesId).value='';showMsg('Message sent','Sent to '+j.sent+(j.sent===1?' user.':' users.'));}
-  else{st.textContent='';showMsg('Some messages failed',(j.sent?('Sent: '+j.sent+'\n'):'')+'Failed: '+j.failed+((j.errors&&j.errors.length)?'\n'+j.errors.join('\n'):''));}
+  else{st.textContent='';showMsg('Some messages failed',(j.sent?('Sent: '+j.sent+'\\n'):'')+'Failed: '+j.failed+((j.errors&&j.errors.length)?'\\n'+j.errors.join('\\n'):''));}
  }catch(e){st.textContent='Request failed: '+e.message;}
  btn.disabled=false;
 }
@@ -101,14 +115,17 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
   // Greys a card out while the bot is disconnected; `ov()` adds the in-card "start the bot" overlay.
   const lk = () => (offline() ? " lk" : "");
   const ov = () => offline() ? `<div class="ov"><p>Use this feature by starting the bot first.</p><form method="post" action="/dashboard/discord/retry"><button class="green">Start the bot</button></form></div>` : "";
-  function shell(tab, owner, content, flash) {
+  const adminOf = (name) => admins.find((a) => a.user === name);
+  const permsOf = (req) => (adminOf(req.session && req.session.owner) || { perms: new Set() }).perms;
+  function shell(tab, owner, content, flash, perms) {
+    const can = (p) => perms.has(p);
     const a = (k, href, label) => `<a class="${tab === k ? "on" : ""}" href="${href}">${label}</a>`;
-    return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AutoAuth Dashboard</title><style>${CSS}</style></head><body><div class="layout"><aside class="side"><div class="brand">◈ AutoAuth</div><nav class="nav">
- ${a("home", "/dashboard", "Bot Control")}${a("db", "/dashboard/users", "Users")}${a("servers", "/dashboard/servers", "Servers")}${a("dm", "/dashboard/dm", "DM Users")}${a("msg", "/channels/@me", "Messages")}${a("roles", "/dashboard/roles", "Linked Roles")}${a("logs", "/dashboard/logs", "Logs")}</nav><p class="muted" style="margin:28px 12px">Signed in as <a href="/users/profile" title="Open your profile" style="text-decoration:underline"><b>${esc(owner)}</b></a></p><form method="post" action="/dashboard/logout"><button class="secondary" style="width:100%">Log out</button></form><a class="muted addbot" style="display:block;margin-top:14px;padding:6px 12px;text-decoration:underline" href="https://discord.com/oauth2/authorize?client_id=${esc(process.env.CLIENT_ID)}&amp;permissions=8&amp;integration_type=0&amp;scope=bot" target="_blank" rel="noopener">Add bot to server</a></aside><main class="${offline() && ["servers", "dm", "roles"].includes(tab) ? "locked" : ""}">${content}${offline() && ["servers", "dm", "roles"].includes(tab) ? `<div class="fullov"><div class="fullbox"><h2 style="margin:0 0 6px">The bot is offline</h2><p class="muted" style="margin:0 0 14px">You have to start the bot first to use this page.</p><form method="post" action="/dashboard/discord/retry" style="margin:0"><button class="green" style="padding:12px 22px;font-size:16px">Start the bot</button></form></div></div>` : ""}</main></div><dialog id="dlg-msg" class="flash-dlg"><div class="dlg-top"><h2 id="msg-title" style="margin:0"></h2><button type="button" class="secondary" onclick="closeAll()">Close</button></div><p id="msg-text"></p></dialog><script>${CLIENT_JS}${flash ? `document.addEventListener("DOMContentLoaded",function(){showMsg("Done",${JSON.stringify(String(flash)).replace(/</g, "\\u003c")});});` : ""}</script></body></html>`;
+    return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AutoAuth Dashboard</title><style>${CSS}</style></head><body><div id="toast" role="status"></div><div class="layout"><aside class="side"><div class="brand">◈ AutoAuth</div><nav class="nav">
+ ${can("bot") ? a("home", "/dashboard", "Bot Control") : ""}${can("users") ? a("db", "/dashboard/users", "Users") : ""}${can("servers") ? a("servers", "/dashboard/servers", "Servers") : ""}${can("dm") ? a("dm", "/dashboard/dm", "DM Users") : ""}${a("msg", "/channels/@me", "Messages")}${can("logs") ? a("logs", "/dashboard/logs", "Logs") : ""}</nav><p class="muted" style="margin:28px 12px">Signed in as <a href="/users/profile" title="Open your profile" style="text-decoration:underline"><b>${esc(owner)}</b></a></p><form method="post" action="/dashboard/logout"><button class="secondary" style="width:100%">Log out</button></form><a class="muted addbot" style="display:block;margin-top:14px;padding:6px 12px;text-decoration:underline" href="https://discord.com/oauth2/authorize?client_id=${esc(process.env.CLIENT_ID)}&amp;permissions=8&amp;integration_type=0&amp;scope=bot" target="_blank" rel="noopener">Add bot to server</a></aside><main class="${offline() && ["servers", "dm", "roles"].includes(tab) ? "locked" : ""}">${content}${offline() && ["servers", "dm", "roles"].includes(tab) ? `<div class="fullov"><div class="fullbox"><h2 style="margin:0 0 6px">The bot is offline</h2><p class="muted" style="margin:0 0 14px">You have to start the bot first to use this page.</p><form method="post" action="/dashboard/discord/retry" style="margin:0"><button class="green" style="padding:12px 22px;font-size:16px">Start the bot</button></form></div></div>` : ""}</main></div><dialog id="dlg-msg" class="flash-dlg"><div class="dlg-top"><h2 id="msg-title" style="margin:0"></h2><button type="button" class="secondary" onclick="closeAll()">Close</button></div><p id="msg-text"></p></dialog><script>${CLIENT_JS}${flash ? `document.addEventListener("DOMContentLoaded",function(){showMsg("Done",${JSON.stringify(String(flash)).replace(/</g, "\\u003c")});});` : ""}</script></body></html>`;
   }
   function render(req, res, tab, content) {
     const flash = req.session.flash; delete req.session.flash;
-    res.send(shell(tab, req.session.owner, content, flash));
+    res.send(shell(tab, req.session.owner, content, flash, permsOf(req)));
   }
   const flash = (req, msg) => { req.session.flash = msg; };
   function back(req, def) {
@@ -156,9 +173,42 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
    <form id="oo-form" method="post" onsubmit="return confirm('Are you sure?')"><div class="opt-actions"><button name="type" value="server" id="oo-server" class="danger">Opt out of server joins</button><button name="type" value="dm" id="oo-dm" class="danger">Opt out of DMs</button><button name="type" value="all" class="danger">Opt out of everything (delete data)</button></div></form></dialog>
   <dialog id="dlg-expiry"><div class="dlg-top"><h2 id="ex-title" style="margin:0"></h2>${x}</div><p class="muted" id="ex-current"></p><p class="muted">After the expiry time the authorization can no longer be used to add the member to servers. Discord tokens refresh automatically, so Never means it stays valid until the user opts out.</p>
    <form id="ex-form" method="post"><label>Expires after</label><select name="duration" id="ex-select">${EXPIRY.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select><button class="green">Save expiry</button></form></dialog>
+  <dialog id="dlg-stream"><div class="dlg-top"><h2 style="margin:0">Streaming status</h2>${x}</div><p class="muted">Enter the Twitch channel and a title. Verify to check the stream and its thumbnail, then set the status.</p>
+   <label>Twitch URL</label><input id="st-url" maxlength="100" placeholder="https://twitch.tv/yourname"><label>Stream title</label><input id="st-title" maxlength="128" placeholder="What the status should say">
+   <div style="display:flex;gap:10px;margin-top:12px"><button type="button" class="secondary" id="st-verify" onclick="streamVerify()">Verify stream</button><button type="button" class="green" id="st-set" onclick="streamSet()" disabled>Set status</button></div>
+   <div class="muted" id="st-note" style="margin-top:10px"></div><img id="st-img" class="stprev" alt="" style="display:none"></dialog>
   <dialog id="dlg-dm"><div class="dlg-top"><h2 id="dm-title" style="margin:0"></h2>${x}</div><label>Message</label><textarea id="dm-msg" maxlength="2000" placeholder="Write your message"></textarea><label>Attachments (optional, up to 5 files, 8 MB total)</label><input type="file" id="dm-files" multiple><button type="button" id="dm-send" onclick="dmSend(dmIds,'dm-msg','dm-files','dm-status','dm-send')">Send DM</button><div class="muted dm-status" id="dm-status"></div></dialog>`;
   }
   const userRow = (u) => ({ user_id: u.user_id, username: u.username, server_authorized: !!u.server_authorized, dm_authorized: !!u.dm_authorized, auth_expires_at: u.auth_expires_at ? new Date(u.auth_expires_at).toISOString() : null });
+
+
+  // ---------- permissions ----------
+  // Each admin has some of: bot, users, servers, dm, logs (Messages and profile are open to every admin).
+  app.use("/dashboard", (req, res, next) => {
+    if (!req.session || !req.session.owner) return next(); // `logged` handles sign-in
+    const p = req.path, perms = permsOf(req), has = (...l) => l.some((x) => perms.has(x));
+    let ok = true;
+    if (p === "/" || p.startsWith("/presence") || p === "/shutdown" || p === "/restart") ok = has("bot");
+    else if (p.startsWith("/users") || p.startsWith("/database")) ok = has("users");
+    else if (/^\/servers\/[^/]+\/(addusers|kickusers|users\/)/.test(p)) ok = has("users", "bot", "servers");
+    else if (p.startsWith("/servers")) ok = has("servers");
+    else if (p === "/dm/send") ok = has("dm", "users");
+    else if (p.startsWith("/dm")) ok = has("dm");
+    else if (p.startsWith("/logs")) ok = has("logs");
+    if (ok) return next();
+    if (req.method === "GET" && p === "/") { // land on the first tab this admin may use
+      const first = [["users", "/dashboard/users"], ["servers", "/dashboard/servers"], ["dm", "/dashboard/dm"], ["logs", "/dashboard/logs"]].find(([k]) => perms.has(k));
+      return res.redirect(303, first ? first[1] : "/channels/@me");
+    }
+    if (req.method !== "GET" || (req.get("content-type") || "").includes("json")) return res.status(403).json({ error: "Your dashboard account does not have permission for that." });
+    res.status(403); return render(req, res, "none", `<div class="top"><div><h1>No permission</h1><p class="muted">Your dashboard account does not have access to this page. Ask an admin to change your permissions in Render.</p></div></div>`);
+  });
+
+  app.use("/channels", (req, res, next) => {
+    if (!req.session || !req.session.owner || req.path.startsWith("/@me")) return next();
+    if (permsOf(req).has("dm")) return next();
+    res.status(403); return render(req, res, "none", `<div class="top"><div><h1>No permission</h1><p class="muted">Your dashboard account cannot open DM chats.</p></div></div>`);
+  });
 
   // ---------- Bot Control ----------
   app.get("/dashboard", logged, async (req, res) => {
@@ -176,7 +226,7 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
   <div class="grid"><div class="card"><div class="muted">Discord connection</div><div class="metric">${ready ? "Online" : "Offline"}</div></div><div class="card"><div class="muted">Discord presence</div><div class="metric">${esc(presence)}</div><p class="muted">${activity ? esc(activity.name) : "No activity"}</p></div><div class="card"><div class="muted">Authorized users</div><div class="metric">${uc.rows[0].n}</div></div><div class="card"><div class="muted">/addusers uses</div><div class="metric">${cs.rows[0]?.uses || 0}</div></div><div class="card"><div class="muted">Servers</div><div class="metric">${guilds.length}</div></div><div class="card"><div class="muted">Log entries</div><div class="metric">${lc.rows[0].n}</div></div><div class="card"><div class="muted">Uptime</div><div class="metric">${upText}</div></div><div class="card"><div class="muted">Gateway latency</div><div class="metric">${ping}</div></div><div class="card"><div class="muted">Memory</div><div class="metric">${mem}</div></div><div class="card"><div class="muted">New authorizations</div><div class="metric">${n24.rows[0].n}</div><p class="muted">last 24h · ${n7.rows[0].n} in 7 days</p></div><div class="card"><div class="muted">Opt-outs</div><div class="metric">${oo.rows[0].n}</div></div><div class="card"><div class="muted">Failed logins (24h)</div><div class="metric">${fl.rows[0].n}</div></div></div>
   <div class="card${lk()}">${ov()}<h2>Quick actions</h2><p class="muted">Add or remove authorized members on a server, or opt a user out. Removing members needs the bot to have Kick Members (the invite asks for Administrator).</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button type="button" class="green" onclick="quickAdd()">Add users to a server</button><button type="button" class="danger" onclick="quickKick()">Remove a member</button><button type="button" class="danger" onclick="quickKickAll()">Remove all members from a server</button><button type="button" class="danger" onclick="quickOptOut()">Opt out a user</button></div></div>
   ${popups(ul.rows.map(userRow))}
-  <div class="card${lk()}">${ov()}<h2>Change Discord presence</h2><p class="muted">These settings change the bot's visible Discord status, not Render's service status.</p><form method="post" action="/dashboard/presence"><div class="row"><div><label>Presence</label><select name="status"><option value="online">Online</option><option value="idle">Idle</option><option value="dnd">Do Not Disturb</option><option value="invisible">Invisible</option></select></div><div><label>Activity</label><select name="kind"><option value="Playing">Playing</option><option value="Listening">Listening</option><option value="Watching">Watching</option><option value="Competing">Competing</option><option value="none">None</option></select></div><div><label>Activity text</label><input name="text" maxlength="128" placeholder="e.g. AutoAuth"></div></div><button>Save presence</button></form></div>
+  <div class="card${lk()}">${ov()}<h2>Change Discord presence</h2><p class="muted">These settings change the bot's visible Discord status, not Render's service status.</p><form id="pr-form" onsubmit="return presenceSubmit(event)"><div class="row"><div><label>Presence</label><select id="pr-status"><option value="online">Online</option><option value="idle">Idle</option><option value="dnd">Do Not Disturb</option><option value="invisible">Invisible</option></select></div><div><label>Activity</label><select id="pr-kind" onchange="actChange()"><option value="Playing">Playing</option><option value="Listening">Listening</option><option value="Watching">Watching</option><option value="Competing">Competing</option><option value="Streaming">Streaming</option><option value="none">None (status message only)</option></select></div><div id="pr-textwrap"><label>Status message</label><input id="pr-text" maxlength="128" placeholder="e.g. AutoAuth"></div></div><button id="pr-btn" type="submit">Set status</button></form></div>
   <div class="card"><div class="top"><h2>Recent activity</h2><a class="btn secondary" href="/dashboard/logs">All logs</a></div><div class="wrap"><table><tr><th>Time UTC</th><th>Event</th><th>Actor</th></tr>${recent.rows.map((x) => `<tr><td>${ts(x.created_at)}</td><td>${esc(x.event_type)}</td><td>${esc(displayActor(x.actor))}</td></tr>`).join("") || "<tr><td colspan=3>No activity yet.</td></tr>"}</table></div></div>`;
       render(req, res, "home", content);
     } catch (e) { console.error(e); res.status(500).send("Dashboard failed to load."); }
@@ -275,14 +325,43 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
       return res.status(500).send("Could not leave that server. Check Render logs.");
     }
   });
-  app.post("/dashboard/presence", logged, verifyOrigin, async (req, res) => {
-    const status = String(req.body.status || "online"), kind = String(req.body.kind || "none"), text = String(req.body.text || "").trim().slice(0, 128);
-    if (!["online", "idle", "dnd", "invisible"].includes(status)) return res.status(400).send("Invalid status.");
-    const types = { Playing: ActivityType.Playing, Listening: ActivityType.Listening, Watching: ActivityType.Watching, Competing: ActivityType.Competing };
-    if (kind !== "none" && !Object.hasOwn(types, kind)) return res.status(400).send("Invalid activity.");
-    if (!client.isReady()) return res.status(503).send("Discord bot is disconnected.");
-    client.user.setPresence({ status, activities: kind !== "none" && text ? [{ name: text, type: types[kind] }] : [] });
-    await log("presence_updated", { status, kind, text }, req.session.owner); res.redirect(303, "/dashboard");
+  const STATUS_NAMES = { online: "Online", idle: "Idle", dnd: "Do Not Disturb", invisible: "Invisible" };
+  const TWITCH_URL = /^https:\/\/(?:www\.|m\.)?twitch\.tv\/([A-Za-z0-9_]{3,25})\/?$/i;
+  app.post("/dashboard/presence/verify-stream", logged, verifyOrigin, express.json({ limit: "10kb" }), async (req, res) => {
+    const m = TWITCH_URL.exec(String((req.body || {}).url || "").trim());
+    if (!m) return res.status(400).json({ error: "Enter a Twitch channel link like https://twitch.tv/yourname." });
+    const login = m[1].toLowerCase(), url = `https://www.twitch.tv/${login}`;
+    try {
+      const r = await fetch(`https://static-cdn.jtvnw.net/previews-ttv/live_user_${login}-440x248.jpg`, { redirect: "manual", signal: AbortSignal.timeout(8000) });
+      const ct = r.headers.get("content-type") || "";
+      if (r.status === 200 && /^image\/(jpeg|png)$/.test(ct)) {
+        const buf = Buffer.from(await r.arrayBuffer());
+        if (buf.length < 400 * 1024) return res.json({ ok: true, live: true, login, url, thumb: `data:${ct};base64,${buf.toString("base64")}` });
+      }
+      res.json({ ok: true, live: false, login, url });
+    } catch (e) { res.status(502).json({ error: "Could not reach Twitch to check the stream. Try again." }); }
+  });
+  app.post("/dashboard/presence", logged, verifyOrigin, express.json({ limit: "10kb" }), async (req, res) => {
+    const b = req.body || {}, status = String(b.status || "online"), kind = String(b.kind || "none"), text = String(b.text || "").trim().slice(0, 128);
+    if (!Object.hasOwn(STATUS_NAMES, status)) return res.status(400).json({ error: "Invalid status." });
+    const types = { Playing: ActivityType.Playing, Listening: ActivityType.Listening, Watching: ActivityType.Watching, Competing: ActivityType.Competing, Streaming: ActivityType.Streaming };
+    if (kind !== "none" && !Object.hasOwn(types, kind)) return res.status(400).json({ error: "Invalid activity." });
+    if (!client.isReady()) return res.status(503).json({ error: "The Discord bot is disconnected." });
+    let activities = [], what = "no activity", extra = {};
+    if (kind === "Streaming") {
+      const title = String(b.title || "").trim().slice(0, 128), m = TWITCH_URL.exec(String(b.url || "").trim());
+      if (!m || !title) return res.status(400).json({ error: "A Twitch URL and a stream title are required." });
+      const url = `https://www.twitch.tv/${m[1].toLowerCase()}`;
+      activities = [{ name: title, type: ActivityType.Streaming, url }]; what = `Streaming ${title}`; extra = { url };
+    } else if (kind === "none") {
+      if (text) { activities = [{ name: "Custom Status", type: ActivityType.Custom, state: text }]; what = `status message "${text}"`; }
+    } else if (text) {
+      activities = [{ name: text, type: types[kind] }];
+      what = { Playing: "Playing ", Listening: "Listening to ", Watching: "Watching ", Competing: "Competing in " }[kind] + text;
+    }
+    try { client.user.setPresence({ status, activities }); } catch (e) { return res.status(500).json({ error: "Discord rejected the status: " + String(e.message).slice(0, 100) }); }
+    await log("presence_updated", { status, kind, text: kind === "Streaming" ? String(b.title || "").slice(0, 128) : text, ...extra }, req.session.owner);
+    res.json({ ok: true, message: `Set the bot's status to ${STATUS_NAMES[status]}: ${what}.` });
   });
 
   // ---------- user actions ----------
@@ -378,8 +457,7 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
     } catch (e) { console.error(e); res.status(500).send("Logs failed to load."); }
   });
 
-  require("./messages")({ app, pool, express, logged, verifyOrigin, esc, render });
+  require("./messages")({ app, pool, express, logged, verifyOrigin, esc, render, admins, ADMIN_PERMS, permsOf });
   Object.assign(dmsApi, require("./dms")({ app, pool, client, esc, logged, verifyOrigin, render, lk, ov }));
-  roles.mountUi({ app, logged, verifyOrigin, render, esc, client });
   return dmsApi;
 };
