@@ -36,9 +36,11 @@ const ADMIN_PERMS = ["bot","users","servers","dm","logs"];
 const owners = [];
 for (let n=1;n<=9;n++) {
  const user=adminEnv(n,"USER"), hash=adminEnv(n,"PASSWORD_HASH"); if(!user||!hash) continue;
- // DASHBOARD_ADMINn_PERMISSIONS: "all" or a comma list of bot,users,servers,dm,logs. Nobody gets default access: if this is not set the user can only use Messages.
+ // Logins defined with the DASHBOARD_OWNERn_* variables are owners and have full permission (unless PERMISSIONS says otherwise).
+ // Logins defined with DASHBOARD_ADMINn_* only get what DASHBOARD_ADMINn_PERMISSIONS lists ("all", "none" or a comma list of bot,users,servers,dm,logs); if it is not set they can only use Messages.
+ const isOwner=!process.env[`DASHBOARD_ADMIN${n}_USER`]&&!!process.env[`DASHBOARD_OWNER${n}_USER`];
  const raw=adminEnv(n,"PERMISSIONS").trim().toLowerCase();
- const perms=new Set(raw==="all"||false?ADMIN_PERMS:raw.split(/[ ,]+/).filter(p=>ADMIN_PERMS.includes(p)));
+ const perms=new Set(raw==="all"||(!raw&&isOwner)?ADMIN_PERMS:raw.split(/[ ,]+/).filter(p=>ADMIN_PERMS.includes(p)));
  owners.push({key:String(n),user,hash,perms});
 }
 if(!owners.length) console.warn("No dashboard logins are set (DASHBOARD_ADMINn_USER / _PASSWORD_HASH), so nobody can sign in to the dashboard.");

@@ -49,7 +49,7 @@ No IDs, names, links or invite URLs live in the code. Everything personal comes 
 | `SESSION_SECRET` | Any long random string (also signs auth links and captchas). Changing it invalidates in-flight sign-ins. |
 | `DASHBOARD_ADMIN1_USER` | Username for the first dashboard login (you choose it, 3 to 32 letters, numbers, `.`, `_` or `-`). See "Dashboard logins" below. |
 | `DASHBOARD_ADMIN1_PASSWORD_HASH` | The scrypt hash of that login's password (`scrypt$<salt>$<hash>`). See "Dashboard logins" below. |
-| `DASHBOARD_ADMIN1_PERMISSIONS` | What that login may use: `all`, `none`, or a comma list of `bot,users,servers,dm,logs`. Leave it out and the login can only use Messages. Give at least one login `all`. |
+| `DASHBOARD_ADMIN1_PERMISSIONS` | What that login may use: `all`, `none`, or a comma list of `bot,users,servers,dm,logs`. Leave it out and the login can only use Messages. Give at least one login `all`. (A login defined with the older `DASHBOARD_OWNERn_USER` / `DASHBOARD_OWNERn_PASSWORD_HASH` names is an owner and has every permission unless you set `PERMISSIONS`.) |
 | `DASHBOARD_ADMIN2_USER`, `DASHBOARD_ADMIN2_PASSWORD_HASH`, `DASHBOARD_ADMIN2_PERMISSIONS` | Optional second login. Same three variables, repeated up to `DASHBOARD_ADMIN9_*`. None are required; no login exists unless you add its variables. |
 | `OWNER1_DISCORD_ID` / `OWNER2_DISCORD_ID` (optional, up to `OWNER9_`) | Discord user IDs of the owners (Discord > Settings > Advanced > Developer Mode, then right-click your profile > Copy User ID). Kick-all skips these users and Logs shows them by name. |
 | `OWNER1_NAME` / `OWNER2_NAME` (optional, same numbers) | Display names for those owners in Logs. |

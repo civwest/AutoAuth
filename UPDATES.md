@@ -139,3 +139,4 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 ## v1.4.4
 - **No premade logins.** No dashboard login is required and none gets default access. A login exists only if its `DASHBOARD_ADMINn_USER` and `_PASSWORD_HASH` are set, and `DASHBOARD_ADMINn_PERMISSIONS` decides what it may use (`all`, `none` or a list; if left out, Messages only). Set `all` on at least one login to use Add user.
 - README: every dashboard login variable is now listed explicitly with an example and the permission words.
+- Logins defined with the `DASHBOARD_OWNERn_*` variables are owners and have full permission by default; `DASHBOARD_ADMINn_*` logins only get what their `_PERMISSIONS` lists (Messages only if unset).
