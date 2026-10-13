@@ -83,3 +83,6 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 - Logging in now remembers where you were going (`/login?next=...`, same-site owner paths only) and sends you back there.
 - `/.well-known/discord` serves `DISCORD_DOMAIN_VERIFICATION` for Discord's domain verification.
 - New database tables created automatically: `owner_profiles`, `owner_dms`.
+
+## v1.3.6
+- **Messages** is now its own tab in the dashboard sidebar (between DM Users and Logs). It stays highlighted on the chat and profile pages. "Signed in as" still links to it.
