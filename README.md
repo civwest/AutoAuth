@@ -99,7 +99,7 @@ These Discord links work from anywhere (a message, a bio, another site). AutoAut
 - DMs only: `https://discord.com/oauth2/authorize?client_id=CLIENT_ID&response_type=code&redirect_uri=https%3A%2F%2FYOUR-SITE%2Foauth%2Fcallback&integration_type=1&scope=identify+guilds+applications.commands`
 - Dashboard sign-in with Discord: `https://discord.com/oauth2/authorize?client_id=CLIENT_ID&response_type=code&redirect_uri=https%3A%2F%2FYOUR-SITE%2Foauth%2Fcallback&scope=identify+guilds+guilds.members.read`
 
-The dashboard Discord sign-in only works for a Discord account that was linked to a login first: sign in with the password, open Messages > Edit profile (via "Signed in as") and press **Link Discord account**. The login page also has a "Sign in with Discord" button. The bot's default status is no activity with the message `YOUR-SITE`.
+The dashboard Discord sign-in only works for a Discord account that was linked to a login first: sign in with the password, open Messages > Edit profile (via "Signed in as") and press **Link Discord account**. The login page also has a "Log in with Discord" button. While linked, the Servers tab lists servers where that Discord account has Manage Server or Administrator and the bot is not a member, each with an Add bot button. The account's `guilds` token is stored encrypted for this and is revoked when you unlink. The bot's default status is no activity with the message `YOUR-SITE`.
 
 ## 5. Pages and routes
 

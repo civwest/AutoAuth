@@ -16,6 +16,8 @@ module.exports = function mountDashboard(c) {
  .card.lk{position:relative;min-height:150px;background:rgba(140,148,160,.22);border-color:rgba(140,148,160,.35)}.card.lk>*:not(.ov){pointer-events:none;filter:grayscale(1);opacity:.35;user-select:none}.ov{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:12px;text-align:center;border-radius:13px;background:rgba(13,17,23,.5);z-index:2}.ov p{margin:0;font-weight:650}.ov form{margin:0}.ov button{padding:8px 16px}.flash-dlg p{margin:12px 0 4px;white-space:pre-wrap}
  .chat{display:flex;flex-direction:column;height:calc(100vh - 150px);min-height:380px}.msgs{flex:1;overflow-y:auto;padding:6px 2px}.msg{display:flex;gap:10px;margin:12px 0;align-items:flex-start}.msg .av{flex-shrink:0}.msg .who{font-weight:700;margin-right:8px}.msg .when{color:var(--muted);font-size:12px}.msg .txt{white-space:pre-wrap;word-break:break-word}.av{width:40px;height:40px;border-radius:50%;background:#222a35;object-fit:cover;display:flex;align-items:center;justify-content:center;font-weight:800;color:white;overflow:hidden}.av.lg{width:96px;height:96px;font-size:34px}.composer{display:flex;gap:10px;margin-top:10px}.composer textarea{flex:1;min-height:46px;max-height:140px;resize:vertical}.dmrow{display:flex;align-items:center;gap:12px;padding:12px;border-radius:10px;border:1px solid var(--line);margin:8px 0;background:#11161d}.dmrow:hover{background:#1a2230}.banner{height:90px;border-radius:12px 12px 0 0;margin:-18px -18px 0}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#6b7280;margin-right:6px}.dot.on{background:#3ba55d}
  .acts{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}td.actcell{text-align:right;min-width:230px;max-width:430px}.acts button{padding:8px 12px}.badge{display:inline-block;border-radius:20px;padding:2px 9px;font-size:12px;background:#263c2c;color:#7ee787;margin:0 4px 4px 0}.badge.dm{background:#1f2f4d;color:#8fb4ff}.badge.none{background:#3c2528;color:#ff938a}.dm-status{margin-top:10px}
+
+ .sv-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}.sv-ic{width:42px;height:42px;border-radius:50%;background:#2b3341;object-fit:cover;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-weight:800}.sv-n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sv-box{position:relative;min-height:230px}.sv-skel{filter:blur(5px);opacity:.75;user-select:none;pointer-events:none}.sv-skel .sv-l{height:12px;border-radius:6px;background:#3a4352}.sv-skel .sv-b{width:90px;height:34px;border-radius:8px;background:#4a5262}.sv-skel button{background:#4a5262;border-color:#4a5262;color:#8a93a1}.sv-ov{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:12px}.sv-ovbox{background:#161b22;border:1px solid var(--line);border-radius:14px;padding:22px 26px;text-align:center;max-width:380px;box-shadow:0 10px 40px rgba(0,0,0,.5)}.sv-ovbox p{margin:0 0 14px}.dbtn{display:inline-flex;align-items:center;justify-content:center;gap:10px;background:#5865F2;color:#fff;border:0;border-radius:6px;padding:11px 18px;font-weight:600;font-size:15px;cursor:pointer;text-decoration:none}.dbtn:hover{background:#4752c4}.dbtn svg{width:22px;height:22px;fill:#fff}
  #toast{position:fixed;top:16px;left:50%;transform:translate(-50%,-140px);background:#1f6f43;color:#fff;padding:12px 22px;border-radius:10px;z-index:200;transition:transform .25s;box-shadow:0 6px 24px rgba(0,0,0,.45);max-width:90vw;text-align:center;font-weight:650}#toast.show{transform:translate(-50%,0)}#toast.bad{background:#8c2f39}.stprev{max-width:100%;border-radius:10px;margin-top:10px;display:block}
  @media(max-width:700px){.layout{display:block}.side{position:static;height:auto;width:auto;border-right:0;border-bottom:1px solid var(--line)}.nav{display:flex;flex-wrap:wrap}.nav a{padding:9px}.brand{padding-bottom:10px}main{padding:15px}}`;
 
@@ -232,11 +234,27 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
     } catch (e) { console.error(e); res.status(500).send("Dashboard failed to load."); }
   });
 
-  app.get("/dashboard/servers", logged, (req, res) => {
+  app.get("/dashboard/servers", logged, async (req, res) => {
     const guilds = client.guilds ? client.guilds.cache.map((g) => ({ id: g.id, name: g.name, members: g.memberCount, joined: g.joinedAt })) : [];
     const content = `<div class="top"><div><h1>Servers</h1><p class="muted">Servers the bot is in. Leaving a server cannot be undone from the dashboard.</p></div></div>
   <div class="card${lk()}">${ov()}<div class="top"><h2>Servers</h2><a class="btn secondary" href="/dashboard/servers">Refresh</a></div><div class="wrap"><table><tr><th>Server</th><th>Server ID</th><th>Cached members</th><th>Joined (UTC)</th><th style="text-align:right">Action</th></tr>${guilds.map((g) => `<tr><td>${esc(g.name)}${jobStatus(g.id)}</td><td>${esc(g.id)}</td><td>${Number(g.members) || "—"}</td><td>${g.joined ? esc(new Date(g.joined).toISOString().slice(0, 10)) : "—"}</td><td style="text-align:right;white-space:nowrap"><form method="post" style="display:inline-block" action="/dashboard/servers/${encodeURIComponent(g.id)}/leave" onsubmit="return confirm('Make AutoAuth leave '+${esc(JSON.stringify(g.name))}+'? This cannot be undone from the dashboard.')"><button class="btn secondary" style="background:#7f1d1d;border-color:#991b1b;color:white">Leave server</button></form></td></tr>`).join("") || "<tr><td colspan=5>Bot is not in any servers.</td></tr>"}</table></div></div>`;
-    render(req, res, "servers", content);
+    const DISCORD_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${require("./icons").discord}"/></svg>`;
+    const linkForm = `<form method="post" action="/users/profile/discord-link" style="margin:0"><input type="hidden" name="return" value="/dashboard/servers"><button class="dbtn">${DISCORD_SVG}Link with Discord</button></form>`;
+    const lg = await core.linkedGuilds(req.session.owner, req.query.refresh === "1").catch(() => ({ linked: false }));
+    const inBot = new Set(guilds.map((g) => g.id));
+    const skel = [["60%", "34%"], ["45%", "28%"], ["70%", "40%"], ["52%", "30%"]].map(([a, b]) => `<div class="sv-row"><div class="sv-ic"></div><div class="sv-n"><div class="sv-l" style="width:${a}"></div><div class="sv-l" style="width:${b};margin-top:8px"></div></div><button type="button" class="secondary" disabled>Add bot</button></div>`).join("");
+    const invite = (id) => `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(process.env.CLIENT_ID)}&scope=bot+applications.commands&permissions=8&guild_id=${encodeURIComponent(id)}&disable_guild_select=true`;
+    let inner;
+    if (!lg.linked || lg.relink) {
+      inner = `<div class="sv-box"><div class="sv-skel">${skel}</div><div class="sv-ov"><div class="sv-ovbox"><p><b>${lg.relink ? "Your Discord link expired" : "Link your Discord account"}</b><br><span class="muted">${lg.relink ? "Link it again" : "Link it"} to see the servers you can add the bot to.</span></p>${linkForm}</div></div></div>`;
+    } else if (lg.error) {
+      inner = `<p class="muted">${esc(lg.error)}</p>`;
+    } else {
+      const rest = lg.guilds.filter((g) => !inBot.has(g.id));
+      inner = `<p class="muted">Servers where <b>${esc(lg.username || "your Discord account")}</b> has Manage Server or Administrator and the bot is not a member.</p>${rest.map((g) => `<div class="sv-row">${g.icon ? `<img class="sv-ic" alt="" src="https://cdn.discordapp.com/icons/${esc(g.id)}/${esc(g.icon)}.png?size=64">` : `<div class="sv-ic">${esc((g.name || "?").slice(0, 1).toUpperCase())}</div>`}<div class="sv-n"><b>${esc(g.name)}</b><div class="muted" style="font-size:12px">${esc(g.id)}</div></div><a class="btn green" target="_blank" rel="noopener" href="${esc(invite(g.id))}">Add bot</a></div>`).join("") || '<p class="muted">The bot is already in every server you can add it to.</p>'}`;
+    }
+    const content2 = content + `<div class="card" style="margin-top:16px"><div class="top"><h2>Servers the bot is not in</h2><a class="btn secondary" href="/dashboard/servers?refresh=1">Refresh</a></div>${inner}</div>`;
+    render(req, res, "servers", content2);
   });
   app.get("/dashboard/database", (req, res) => res.redirect(301, "/dashboard/users"));
   app.get("/dashboard/database/export.csv", (req, res) => res.redirect(301, "/dashboard/users/export.csv"));
@@ -457,7 +475,7 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
     } catch (e) { console.error(e); res.status(500).send("Logs failed to load."); }
   });
 
-  require("./messages")({ app, pool, express, logged, verifyOrigin, esc, render, admins, ADMIN_PERMS, permsOf });
+  require("./messages")({ unlinkDiscord: core.unlinkDiscord, app, pool, express, logged, verifyOrigin, esc, render, admins, ADMIN_PERMS, permsOf });
   Object.assign(dmsApi, require("./dms")({ app, pool, client, esc, logged, verifyOrigin, render, lk, ov }));
   return dmsApi;
 };

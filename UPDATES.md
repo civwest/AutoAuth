@@ -145,3 +145,8 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 - **Default bot status:** no activity, status message `autoauth.cfd` (the host from `REDIRECT_URI`).
 - **Authorization links work from anywhere.** The Discord authorize links (server joins, server joins + DMs, DMs only) no longer need to start on the website: the callback works out the mode from the scopes Discord granted. The site's own buttons now request the same scopes (including `guilds`).
 - **Sign in to the dashboard with Discord** (`identify guilds guilds.members.read`): link your Discord account on Edit profile > *Link Discord account* (needs a password sign-in first), then use "Sign in with Discord" on the login page or the direct link. Unlinked accounts are refused. New table `dashboard_discord`; the token is revoked immediately.
+
+## v1.4.6
+- **Servers tab:** new box *Servers the bot is not in*. With a linked Discord account it lists the servers where that account has Manage Server or Administrator and the bot is not a member, each with icon, name and an **Add bot** button (cached one minute; Refresh reloads). Without a linked account it shows blurred placeholder rows with greyed buttons and a **Link with Discord** button on top.
+- **Login page:** proper Discord-styled **Log in with Discord** button (blurple, Discord logo).
+- A linked login keeps its Discord `guilds` token encrypted (table `dashboard_discord` gains token columns) so the list works after a normal password sign-in; unlinking revokes it. If it expires you are asked to link again.

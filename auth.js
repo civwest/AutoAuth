@@ -179,6 +179,7 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
   app.post("/users/profile/discord-link", verifyOrigin, (req, res) => {
     if (!req.session || !req.session.owner) return res.redirect(303, "/login");
     req.session.linkPending = Date.now() + 10 * 60 * 1000;
+    req.session.linkReturn = ["/dashboard/servers", "/users/profile/edit"].includes((req.body || {}).return) ? req.body.return : "/users/profile/edit";
     req.session.save(() => res.set("Cache-Control", "no-store").redirect(303, discordUrl("link")));
   });
 
@@ -223,9 +224,8 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
         }
       }
       if (mode === "login" || mode === "link") {
-        // Dashboard sign-in / account linking: only identity is used, so the token is revoked straight away.
-        fetch("https://discord.com/api/v10/oauth2/token/revoke", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: process.env.CLIENT_ID, client_secret: process.env.CLIENT_SECRET, token: t.access_token, token_type_hint: "access_token" }) }).catch(() => {});
-        const out = await dashDiscord(req, u, mode);
+        // Dashboard sign-in / account linking. The (guilds-only) token is kept encrypted for a linked login so the Servers page can list servers.
+        const out = await dashDiscord(req, u, mode, t);
         if (out.redirect) return res.redirect(303, out.redirect);
         return res.status(out.status || 403).send(site.page("Dashboard sign-in", `<h1>${out.title || "Could not sign in"}</h1><p>${out.error}</p><p><a class="cta" href="/login">Go to the dashboard login</a></p>`, "auth"));
       }

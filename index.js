@@ -82,6 +82,9 @@ async function schema() {
  DROP TABLE IF EXISTS role_links, role_defs, role_assign, twitch_links;
  ALTER TABLE owner_profiles ADD COLUMN IF NOT EXISTS discord TEXT;
  CREATE TABLE IF NOT EXISTS dashboard_discord(owner_key TEXT PRIMARY KEY, discord_id TEXT UNIQUE NOT NULL, username TEXT, linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ ALTER TABLE dashboard_discord ADD COLUMN IF NOT EXISTS access_token_enc TEXT;
+ ALTER TABLE dashboard_discord ADD COLUMN IF NOT EXISTS refresh_token_enc TEXT;
+ ALTER TABLE dashboard_discord ADD COLUMN IF NOT EXISTS expires_at BIGINT;
  CREATE INDEX IF NOT EXISTS bot_dms_user_idx ON bot_dms(user_id, id);
  CREATE TABLE IF NOT EXISTS owner_profiles(owner_key TEXT PRIMARY KEY, display_name TEXT, pronouns TEXT, bio TEXT, status_emoji TEXT, status_text TEXT, accent TEXT, timezone TEXT, links TEXT, avatar BYTEA, avatar_type TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  CREATE TABLE IF NOT EXISTS owner_dms(id TEXT PRIMARY KEY, owner_a TEXT NOT NULL, owner_b TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(owner_a, owner_b));`);
@@ -233,22 +236,56 @@ app.get("/health",(_,res)=>res.send("ok"));
 // Discord domain verification (Discord > Settings > Domains asks you to serve this value at /.well-known/discord)
 app.get("/.well-known/discord",(req,res)=>{ const v=(process.env.DISCORD_DOMAIN_VERIFICATION||"").trim(); if(!/^dh=[0-9a-f]{20,64}$/i.test(v)) return res.status(404).type("text/plain").send("Not found"); res.type("text/plain").send(v); });
 // Dashboard sign-in with Discord: a Discord account can be linked to a dashboard login from the profile edit page.
-async function dashDiscord(req,u,intent){
+// Servers the signed-in dashboard user's linked Discord account can add bots to (Manage Server / Administrator / owner), cached for a minute.
+const guildCache=new Map();
+async function linkedGuilds(ownerUser,force){
+ const owner=owners.find(o=>o.user===ownerUser); if(!owner) return {linked:false};
+ const hit=guildCache.get(owner.key); if(hit&&!force&&hit.until>Date.now()) return hit.v;
+ const row=(await pool.query("SELECT discord_id,username,access_token_enc,refresh_token_enc,expires_at FROM dashboard_discord WHERE owner_key=$1",[owner.key])).rows[0];
+ if(!row) return {linked:false};
+ let v;
+ try{
+  if(!row.access_token_enc||!row.refresh_token_enc) throw Object.assign(new Error("relink"),{relink:true});
+  let access=dec(row.access_token_enc);
+  if(Number(row.expires_at)<Date.now()+60000){
+   const b=await refresh(dec(row.refresh_token_enc)); access=b.access_token;
+   await pool.query("UPDATE dashboard_discord SET access_token_enc=$2,refresh_token_enc=$3,expires_at=$4 WHERE owner_key=$1",[owner.key,...tokenCols(b)]);
+  }
+  const r=await fetch("https://discord.com/api/v10/users/@me/guilds",{headers:{Authorization:`Bearer ${access}`}});
+  if(r.status===401) throw Object.assign(new Error("relink"),{relink:true});
+  if(!r.ok) throw new Error("Discord returned "+r.status);
+  const list=await r.json();
+  const can=g=>g.owner||((BigInt(g.permissions||0)&0x20n)!==0n)||((BigInt(g.permissions||0)&0x8n)!==0n);
+  v={linked:true,username:row.username,guilds:list.filter(can).map(g=>({id:g.id,name:g.name,icon:g.icon}))};
+ }catch(e){ v={linked:true,username:row.username,error:e.relink?"Your Discord link expired. Link your account again.":"Could not load your servers from Discord ("+String(e.message).slice(0,60)+").",relink:!!e.relink}; }
+ guildCache.set(owner.key,{v,until:Date.now()+60000}); return v;
+}
+async function unlinkDiscord(ownerKey){
+ const row=(await pool.query("DELETE FROM dashboard_discord WHERE owner_key=$1 RETURNING access_token_enc",[ownerKey])).rows[0];
+ guildCache.delete(ownerKey);
+ if(row&&row.access_token_enc){ try{ await fetch("https://discord.com/api/v10/oauth2/token/revoke",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:process.env.CLIENT_ID,client_secret:process.env.CLIENT_SECRET,token:dec(row.access_token_enc),token_type_hint:"access_token"})}); }catch{} }
+}
+const tokenCols=t=>[enc(t.access_token),enc(t.refresh_token),Date.now()+Number(t.expires_in||604800)*1000];
+async function dashDiscord(req,u,intent,t){
  const name=u.global_name||u.username||u.id;
  if(intent==="link"){
   const owner=owners.find(o=>o.user===(req.session&&req.session.owner));
   if(!owner||!req.session.linkPending||req.session.linkPending<Date.now()) return {status:400,title:"Link expired",error:"Start linking again from your profile while signed in to the dashboard."};
   delete req.session.linkPending;
   try{
-   await pool.query("INSERT INTO dashboard_discord(owner_key,discord_id,username) VALUES($1,$2,$3) ON CONFLICT(owner_key) DO UPDATE SET discord_id=$2,username=$3,linked_at=NOW()",[owner.key,u.id,name]);
+   await pool.query("INSERT INTO dashboard_discord(owner_key,discord_id,username,access_token_enc,refresh_token_enc,expires_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(owner_key) DO UPDATE SET discord_id=$2,username=$3,access_token_enc=$4,refresh_token_enc=$5,expires_at=$6,linked_at=NOW()",[owner.key,u.id,name,...tokenCols(t)]);
+   guildCache.delete(owner.key);
   }catch(e){ if(e.code==="23505") return {status:409,title:"Already linked",error:"That Discord account is already linked to another dashboard login."}; throw e; }
   await log("dashboard_discord_linked",{discord_id:u.id},owner.user);
   req.session.flash=`Discord account ${name} is now linked. You can sign in with Discord.`;
-  return {redirect:"/users/profile/edit"};
+  const ret=["/dashboard/servers","/users/profile/edit"].includes(req.session.linkReturn)?req.session.linkReturn:"/users/profile/edit"; delete req.session.linkReturn;
+  return {redirect:ret};
  }
  const row=(await pool.query("SELECT owner_key FROM dashboard_discord WHERE discord_id=$1",[u.id])).rows[0];
  const owner=row&&owners.find(o=>o.key===row.owner_key);
  if(!owner){ await log("dashboard_discord_login_failed",{discord_id:u.id}); return {status:403,title:"This Discord account is not linked",error:"No dashboard login is linked to this Discord account. Sign in with your username and password, then link Discord on your profile (Edit profile)."}; }
+ await pool.query("UPDATE dashboard_discord SET access_token_enc=$2,refresh_token_enc=$3,expires_at=$4,username=$5 WHERE owner_key=$1",[owner.key,...tokenCols(t),name]).catch(()=>{});
+ guildCache.delete(owner.key);
  await new Promise((ok,no)=>req.session.regenerate(e=>e?no(e):ok()));
  req.session.owner=owner.user;req.session.deviceFingerprint=deviceFingerprint(req);req.session.createdAt=Date.now();
  await new Promise(ok=>req.session.save(ok));
@@ -257,11 +294,12 @@ async function dashDiscord(req,u,intent){
 }
 require("./auth")(app,{site,pool,enc,log,equal,verifyOrigin,optOutUser,dashDiscord}); // /auth, /auth/captcha, /auth/start, /oauth/callback
 
+const DISCORD_PATH=require("./icons").discord;
 function discordLoginUrl(){ const u=new URL("https://discord.com/oauth2/authorize"); u.searchParams.set("client_id",process.env.CLIENT_ID); u.searchParams.set("response_type","code"); u.searchParams.set("redirect_uri",process.env.REDIRECT_URI); u.searchParams.set("scope","identify guilds guilds.members.read"); return u.toString(); }
 app.get("/dashboard/login",(req,res)=>res.redirect(302,"/login"));
 app.get("/login",(req,res)=>{
  if(req.session.owner)return res.redirect(safeNext(req.query.next)||"/dashboard");
- res.send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AutoAuth Login</title><style>body{font:16px system-ui;background:#0d1117;color:#e6edf3}.box{max-width:420px;margin:12vh auto;padding:28px;background:#161b22;border:1px solid #30363d;border-radius:14px}input,button{width:100%;padding:12px;margin:8px 0 14px;box-sizing:border-box;border-radius:8px;border:1px solid #30363d}input{background:#0d1117;color:white}button{background:#7289da;color:white;border:0;cursor:pointer}</style><div class="box"><h1>AutoAuth</h1><p>Owner dashboard login</p>${req.query.error?"<p>Login failed. Check username and password.</p>":""}<form method="post"><input type="hidden" name="next" value="${esc(safeNext(req.query.next))}"><label>Username</label><input name="username" autocomplete="username" required><label>Password</label><input type="password" name="password" autocomplete="current-password" required><button>Sign in</button></form><a href="${esc(discordLoginUrl())}" style="display:block;text-align:center;padding:12px;border-radius:8px;border:1px solid #30363d;color:#e6edf3;text-decoration:none">Sign in with Discord</a><p style="font-size:13px;color:#9da7b3">Only works if your Discord account is linked to a login (Edit profile > Link Discord).</p></div>`);
+ res.send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AutoAuth Login</title><style>body{font:16px system-ui;background:#0d1117;color:#e6edf3}.box{max-width:420px;margin:12vh auto;padding:28px;background:#161b22;border:1px solid #30363d;border-radius:14px}input,button{width:100%;padding:12px;margin:8px 0 14px;box-sizing:border-box;border-radius:8px;border:1px solid #30363d}input{background:#0d1117;color:white}button{background:#7289da;color:white;border:0;cursor:pointer}</style><div class="box"><h1>AutoAuth</h1><p>Owner dashboard login</p>${req.query.error?"<p>Login failed. Check username and password.</p>":""}<form method="post"><input type="hidden" name="next" value="${esc(safeNext(req.query.next))}"><label>Username</label><input name="username" autocomplete="username" required><label>Password</label><input type="password" name="password" autocomplete="current-password" required><button>Sign in</button></form><div style="display:flex;align-items:center;gap:10px;color:#9da7b3;font-size:13px;margin:6px 0"><span style="flex:1;height:1px;background:#30363d"></span>or<span style="flex:1;height:1px;background:#30363d"></span></div><a href="${esc(discordLoginUrl())}" style="display:flex;align-items:center;justify-content:center;gap:10px;padding:12px;border-radius:6px;background:#5865F2;color:#fff;text-decoration:none;font-weight:600"><svg viewBox="0 0 24 24" width="22" height="22" fill="#fff" aria-hidden="true"><path d="${DISCORD_PATH}"/></svg>Log in with Discord</a><p style="font-size:13px;color:#9da7b3">Works once your Discord account is linked to your login (Edit profile > Link Discord account).</p></div>`);
 });
 app.post("/login",async(req,res)=>{
  const ip=req.ip||"unknown", a=attempts.get(ip)||{n:0,until:0};
@@ -274,7 +312,7 @@ app.post("/login",async(req,res)=>{
 app.post("/dashboard/logout",logged,async(req,res)=>{const owner=req.session.owner;await log("dashboard_logout",{},owner);req.session.destroy(()=>res.redirect("/"));});
 
 dash=require("./dashboard")({app,express,pool,client,esc,log,logged,verifyOrigin,displayActor,displayDetail,ActivityType,
-  core:{admins:owners,ADMIN_PERMS,OWNER_IDS,isExpired,addUserToGuild,addAllToGuild,kickFromGuild,optOutUser,sendDmTo,connectDiscord,discordState,shutdownBot}});
+  core:{linkedGuilds,unlinkDiscord,admins:owners,ADMIN_PERMS,OWNER_IDS,isExpired,addUserToGuild,addAllToGuild,kickFromGuild,optOutUser,sendDmTo,connectDiscord,discordState,shutdownBot}});
 
 // ---------- Discord events ----------
 const onInteraction=async i=>{

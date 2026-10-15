@@ -166,7 +166,7 @@ $('au-copy').addEventListener('click',function(){var t=$('au-n1').textContent+'=
   });
 
   app.post("/users/profile/discord-unlink", logged, owner, verifyOrigin, async (req, res) => {
-    await pool.query("DELETE FROM dashboard_discord WHERE owner_key=$1", [req.me]);
+    await c.unlinkDiscord(req.me);
     req.session.flash = "Discord account unlinked.";
     res.redirect(303, "/users/profile/edit");
   });
