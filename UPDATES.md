@@ -165,3 +165,9 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 
 ## v1.4.9
 - **Dashboard sign-in with Discord now has its own callback URL**, `/login/callback` (optional env `LOGIN_REDIRECT_URI`). It no longer goes through the authorization callback, so it signs you in instead of showing the connected screen. Add `https://YOUR-SITE/login/callback` under OAuth2 > Redirects in the Developer Portal. The Link Discord button and the login button use it; the old login link that used `/oauth/callback` no longer works.
+
+## v1.5.0
+- New Side Projects tab: create OAuth callback, interactions, webhook, terms, privacy and invite endpoints at `/projects/<name>/...`, stored in the database.
+- Image cropper rebuilt in Discord's Edit Image style (circle for avatar, rectangle for banner, zoom slider, pinch and drag).
+- Removed the Discord ID field from the profile; Servers box reads "Servers you're in."
+- Removed explanatory text from dashboard pages; it now lives in the README.

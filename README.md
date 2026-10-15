@@ -133,3 +133,29 @@ The dashboard Discord sign-in only works for a Discord account that was linked t
 
 
 **Adding more dashboard users:** open Messages > **Add user** (`/users/add`, only for users with every permission). Type a username and password and tick what they may use (Bot Control, Users, Servers, DM Users, Logs). The page shows the three Render variables to add: `DASHBOARD_ADMINn_USER`, `DASHBOARD_ADMINn_PASSWORD_HASH` and `DASHBOARD_ADMINn_PERMISSIONS` (`all`, `none` or a list like `bot,logs`). Save them in Render and let it redeploy. Every dashboard user can use Messages and message every other user. The password is never stored.
+
+
+## Dashboard guide
+
+- **Opt out**: server or DM opt-outs only turn that permission off. Opting out of everything revokes the grant with Discord and deletes the saved record and its log entries. People who allowed DMs get a message first. Nobody is removed from servers. *Opt out all* does this for every stored user.
+- **Expiry**: after the expiry time a grant can no longer add the member to servers. Tokens refresh automatically, so "Never" stays valid until the user opts out.
+- **Quick actions**: removing members needs the bot to have Kick Members.
+- **DM Users**: one chat per authorized person. Messages from people who haven't authorized are ignored. Retention is set by `DM_RETENTION_DAYS` (default 30, 0 keeps until deleted).
+- **Messages**: private chat between dashboard users, kept in memory only.
+- **Add user**: generates three Render variables (`DASHBOARD_ADMINn_USER`, `_PASSWORD_HASH`, `_PERMISSIONS`). Add them in Render > Environment and redeploy.
+- **Profile**: link Discord from the profile page to enable "Log in with Discord". Add `<your origin>/login/callback` as a redirect in the Developer Portal (or set `LOGIN_REDIRECT_URI`).
+
+## Side Projects
+
+Dashboard > Side Projects (needs the `projects` permission) creates small Discord-bot web endpoints under `https://<your domain>/projects/<project-name>/...`. Projects are stored in the database (`side_projects`, `side_project_users`), not in environment variables.
+
+| For | URL | Fields |
+|---|---|---|
+| OAuth callback | `/projects/<name>/oauth/callback` | client ID, client secret, message or redirect, store tokens |
+| Interactions endpoint | `/projects/<name>/interactions` | application public key, reply text |
+| Webhook events | `/projects/<name>/webhook` | application public key |
+| Terms of Service | `/projects/<name>/terms` | title, text |
+| Privacy Policy | `/projects/<name>/privacy` | title, text |
+| Invite link | `/projects/<name>/invite` | client ID, permissions, scopes |
+
+Use the URL in the matching Developer Portal field (Redirects, Interactions Endpoint URL, Webhook Events URL, Terms of Service URL, Privacy Policy URL). Interactions and webhooks verify Discord's Ed25519 signature with the public key you enter. Client secrets and stored tokens are encrypted with `TOKEN_ENCRYPTION_KEY`.

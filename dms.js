@@ -55,7 +55,7 @@ module.exports = function mountDms(c) {
   app.get("/dashboard/dm", logged, async (req, res) => {
     try {
       const list = await conversations();
-      const content = `<div class="top"><div><h1>DM Users</h1><p class="muted">One chat per person who has authorized AutoAuth. Messages they send to the bot appear here; messages from anyone who has not authorized are ignored. Messages are kept ${Number(process.env.DM_RETENTION_DAYS ?? 30) > 0 ? "for " + Number(process.env.DM_RETENTION_DAYS ?? 30) + " days" : "until you delete them"}.</p></div></div>
+      const content = `<div class="top"><div><h1>DM Users</h1></div></div>
   <div class="card${lk()}">${ov()}${list.map((u) => `<a class="dmrow" href="${esc(chatUrl(u.user_id, u.guild))}">${avatar(u.username, u.avatar_url)}<div style="flex:1;min-width:0"><div><b>${esc(u.username)}</b> ${tagsFor(u.authorized)}</div><div class="muted" style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${u.last_content ? esc(u.last_content) : "No messages yet"}</div></div><div class="muted" style="font-size:12px;text-align:right">${u.last_at ? esc(ago(u.last_at)) : ""}${u.unread ? `<div><span class="badge" style="background:#7289da;color:#fff;margin:4px 0 0">${u.unread} new</span></div>` : ""}</div></a>`).join("") || '<p class="muted">No DM chats yet. People appear here when they allow DMs on the website or message the bot.</p>'}</div>`;
       render(req, res, "dm", content);
     } catch (e) { console.error(e); res.status(500).send("DM page failed to load."); }

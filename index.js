@@ -34,7 +34,7 @@ function freshClient() {
  c.on("messageCreate",m=>{ if(m.author.bot||m.channel.type!==ChannelType.DM) return; if(dash&&dash.recordInbound) dash.recordInbound(m).catch(e=>console.warn("Could not store DM:",e.message)); });
  return c;
 }
-const ADMIN_PERMS = ["bot","users","servers","dm","logs"];
+const ADMIN_PERMS = ["bot","users","servers","dm","logs","projects"];
 const owners = [];
 for (let n=1;n<=9;n++) {
  const user=adminEnv(n,"USER"), hash=adminEnv(n,"PASSWORD_HASH"); if(!user||!hash) continue;
@@ -80,6 +80,8 @@ async function schema() {
  CREATE TABLE IF NOT EXISTS bot_dms(id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, username TEXT, avatar_url TEXT, direction TEXT NOT NULL, sender TEXT, content TEXT NOT NULL DEFAULT '', attachments JSONB NOT NULL DEFAULT '[]'::jsonb, mutual BOOLEAN NOT NULL DEFAULT FALSE, authorized BOOLEAN NOT NULL DEFAULT FALSE, is_read BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  ALTER TABLE bot_dms ADD COLUMN IF NOT EXISTS mutual_guild TEXT;
  DROP TABLE IF EXISTS role_links, role_defs, role_assign, twitch_links;
+ CREATE TABLE IF NOT EXISTS side_projects(slug TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL, config JSONB NOT NULL DEFAULT '{}', created_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ CREATE TABLE IF NOT EXISTS side_project_users(slug TEXT NOT NULL, user_id TEXT NOT NULL, username TEXT, access_token_enc TEXT, refresh_token_enc TEXT, expires_at BIGINT, scope TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(slug,user_id));
  CREATE TABLE IF NOT EXISTS dashboard_discord(owner_key TEXT PRIMARY KEY, discord_id TEXT UNIQUE NOT NULL, username TEXT, linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  ALTER TABLE dashboard_discord ADD COLUMN IF NOT EXISTS access_token_enc TEXT;
  ALTER TABLE dashboard_discord ADD COLUMN IF NOT EXISTS refresh_token_enc TEXT;
@@ -295,6 +297,7 @@ async function dashDiscord(req,u,intent,t){
  await log("dashboard_login_success",{method:"discord",session_ttl_minutes:120,device_bound:true},owner.user);
  return {redirect:"/dashboard"};
 }
+const projects=require("./projects")({pool,enc,dec,log,express}); projects.mountPublic({app,site}); // /projects/<name>/...
 require("./auth")(app,{site,pool,enc,log,equal,verifyOrigin,optOutUser,dashDiscord,loginRedirect:LOGIN_REDIRECT}); // /auth, /auth/start, /oauth/callback
 
 const DISCORD_PATH=require("./icons").discord;
@@ -315,7 +318,7 @@ app.post("/login",async(req,res)=>{
 app.post("/dashboard/logout",logged,async(req,res)=>{const owner=req.session.owner;await log("dashboard_logout",{},owner);req.session.destroy(()=>res.redirect("/"));});
 
 dash=require("./dashboard")({app,express,pool,client,esc,log,logged,verifyOrigin,displayActor,displayDetail,ActivityType,
-  core:{linkedGuilds,unlinkDiscord,admins:owners,ADMIN_PERMS,OWNER_IDS,isExpired,addUserToGuild,addAllToGuild,kickFromGuild,optOutUser,sendDmTo,connectDiscord,discordState,shutdownBot}});
+  core:{projects,linkedGuilds,unlinkDiscord,admins:owners,ADMIN_PERMS,OWNER_IDS,isExpired,addUserToGuild,addAllToGuild,kickFromGuild,optOutUser,sendDmTo,connectDiscord,discordState,shutdownBot}});
 
 // ---------- Discord events ----------
 const onInteraction=async i=>{

@@ -71,7 +71,7 @@ ${p.discord ? `<h3>Discord</h3><p>${discordHref(p.discord) ? `<a href="${esc(dis
     const p = await getProfile(req.me);
     const dl = (await pool.query("SELECT discord_id,username FROM dashboard_discord WHERE owner_key=$1", [req.me])).rows[0];
     let zones = []; try { zones = Intl.supportedValuesOf("timeZone"); } catch {}
-    const content = `<div class="top"><div><h1>Edit profile</h1><p class="muted">Only the owners can see this profile.</p></div><a class="btn secondary" href="/users/profile">Cancel</a></div>
+    const content = `<div class="top"><div><h1>Edit profile</h1></div><a class="btn secondary" href="/users/profile">Cancel</a></div>
 <div class="card" style="max-width:640px"><label style="margin-top:0">Banner</label><div id="bn-prev" class="bnprev" style="${bannerStyle(p)}"></div>
 <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button type="button" class="secondary" id="bn-pick">Upload banner</button><button type="button" class="secondary" id="bn-rm">Remove banner</button></div>
 <input type="file" id="bn-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
@@ -81,44 +81,48 @@ ${p.discord ? `<h3>Discord</h3><p>${discordHref(p.discord) ? `<a href="${esc(dis
 <label>Status</label><div style="display:flex;gap:8px"><input id="pf-emoji" maxlength="4" style="width:70px" value="${esc(p.emoji)}" placeholder="🙂"><input id="pf-status" maxlength="100" value="${esc(p.status)}" placeholder="What are you up to?"></div>
 <label>About me</label><textarea id="pf-bio" maxlength="400" style="min-height:90px">${esc(p.bio)}</textarea>
 <label>Time zone</label><select id="pf-tz"><option value="">Not set</option>${zones.map((z) => `<option${z === p.tz ? " selected" : ""}>${esc(z)}</option>`).join("")}</select>
-<label>Discord (user ID, discord.com/users link, invite link or username)</label><input id="pf-discord" maxlength="100" value="${esc(p.discord)}" placeholder="e.g. 123456789012345678 or https://discord.gg/yourinvite">
 <label>Links (one per line, up to 3, https only)</label><textarea id="pf-links" maxlength="400" style="min-height:70px">${esc(p.links)}</textarea>
 <label>Profile colour</label><input type="color" id="pf-accent" value="${esc(p.accent)}" style="width:80px;height:40px;padding:2px">
 <div style="margin-top:16px"><button type="button" class="green" id="pf-save">Save profile</button></div></div>
-<div class="card" style="max-width:640px;margin-top:16px"><h2>Sign in with Discord</h2>${dl ? `<p>Linked to Discord account <b>${esc(dl.username || dl.discord_id)}</b> (${esc(dl.discord_id)}). You can use "Sign in with Discord" on the login page.</p><form method="post" action="/users/profile/discord-unlink"><button class="danger">Unlink Discord</button></form>` : `<p class="muted">Link your Discord account to this login so you can sign in with Discord instead of a password. Nobody can sign in with Discord unless you link it here while signed in.</p><form method="post" action="/users/profile/discord-link"><button class="dbtn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="${require("./icons").discord}"/></svg>Link with Discord</button></form>`}</div>
-<dialog id="dlg-crop"><div class="dlg-top"><h2 id="cr-title" style="margin:0">Crop</h2><button type="button" class="secondary" onclick="closeAll()">Cancel</button></div><p class="muted">Drag the image to position it and use the slider to zoom.</p>
-<div style="display:flex;justify-content:center"><div class="crop-wrap" id="cr-wrap"><canvas id="cr-cv"></canvas><div class="crop-mask" id="cr-mask"></div></div></div>
-<input type="range" id="cr-zoom" min="0" max="100" value="0" style="margin-top:14px"><div style="margin-top:12px"><button type="button" class="green" id="cr-ok">Use this crop</button></div></dialog>
+<div class="card" style="max-width:640px;margin-top:16px"><h2>Sign in with Discord</h2>${dl ? `<p>Linked to Discord account <b>${esc(dl.username || dl.discord_id)}</b> (${esc(dl.discord_id)}). </p><form method="post" action="/users/profile/discord-unlink"><button class="danger">Unlink Discord</button></form>` : `<form method="post" action="/users/profile/discord-link"><button class="dbtn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="${require("./icons").discord}"/></svg>Link with Discord</button></form>`}</div>
+<dialog id="dlg-crop" class="crop-dlg"><div class="cr-head">Edit Image</div>
+<div class="cr-stage"><div class="crop-wrap" id="cr-wrap"><canvas id="cr-cv"></canvas><div class="crop-mask" id="cr-mask"></div></div></div>
+<div class="cr-zoom"><svg viewBox="0 0 24 24" width="16" height="16" fill="#9da7b3"><path d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2zM8.5 13.5l2.5 3 3.5-4.5 4.5 6H5l3.5-4.5z"/></svg><input type="range" id="cr-zoom" min="0" max="100" value="0"><svg viewBox="0 0 24 24" width="26" height="26" fill="#9da7b3"><path d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2zM8.5 13.5l2.5 3 3.5-4.5 4.5 6H5l3.5-4.5z"/></svg></div>
+<div class="cr-foot"><button type="button" class="secondary" onclick="closeAll()">Cancel</button><button type="button" class="dbtn" id="cr-ok">Apply</button></div></dialog>
 <script>${EDIT_JS}</script>`;
     render(req, res, "profile", content);
   });
 
   const EDIT_JS = `
 var $=function(i){return document.getElementById(i);};var av=null,bn=null,rmAv=false,rmBn=false;
-var crop={img:null,s:1,min:1,x:0,y:0,w:300,h:300,ow:256,oh:256,cb:null,drag:null};
+var crop={img:null,s:1,min:1,x:0,y:0,w:320,h:320,ow:256,oh:256,cb:null},ptrs={},pinch=0;
 function cdraw(){var c=$('cr-cv'),g=c.getContext('2d');g.clearRect(0,0,crop.w,crop.h);g.drawImage(crop.img,crop.x,crop.y,crop.img.width*crop.s,crop.img.height*crop.s);}
 function cclamp(){crop.x=Math.min(0,Math.max(crop.w-crop.img.width*crop.s,crop.x));crop.y=Math.min(0,Math.max(crop.h-crop.img.height*crop.s,crop.y));}
-function cscale(ns){var cx=crop.w/2,cy=crop.h/2,r=ns/crop.s;crop.x=cx-(cx-crop.x)*r;crop.y=cy-(cy-crop.y)*r;crop.s=ns;cclamp();cdraw();}
+function cscale(ns){ns=Math.max(crop.min,Math.min(crop.min*4,ns));var cx=crop.w/2,cy=crop.h/2,r=ns/crop.s;crop.x=cx-(cx-crop.x)*r;crop.y=cy-(cy-crop.y)*r;crop.s=ns;cclamp();cdraw();$('cr-zoom').value=Math.round((ns/crop.min-1)/3*100);}
 function openCrop(file,o){var img=new Image(),url=URL.createObjectURL(file);
- img.onload=function(){crop.img=img;crop.w=o.w;crop.h=o.h;crop.ow=o.ow;crop.oh=o.oh;crop.cb=o.cb;var c=$('cr-cv');c.width=o.w;c.height=o.h;$('cr-wrap').style.width=o.w+'px';$('cr-wrap').style.height=o.h+'px';$('cr-mask').className='crop-mask'+(o.round?' round':'');$('cr-title').textContent=o.title;
-  crop.min=Math.max(o.w/img.width,o.h/img.height);crop.s=crop.min;crop.x=(o.w-img.width*crop.s)/2;crop.y=(o.h-img.height*crop.s)/2;$('cr-zoom').value=0;cdraw();closeAll();openDlg('dlg-crop');};
+ img.onload=function(){crop.img=img;crop.w=o.w;crop.h=o.h;crop.ow=o.ow;crop.oh=o.oh;crop.cb=o.cb;var c=$('cr-cv');c.width=o.w;c.height=o.h;c.style.width=o.w+'px';c.style.height=o.h+'px';$('cr-wrap').style.width=o.w+'px';$('cr-wrap').style.height=o.h+'px';$('cr-mask').className='crop-mask'+(o.round?' round':'');
+  crop.min=Math.max(o.w/img.width,o.h/img.height);crop.s=crop.min;crop.x=(o.w-img.width*crop.s)/2;crop.y=(o.h-img.height*crop.s)/2;$('cr-zoom').value=0;cdraw();URL.revokeObjectURL(url);closeAll();openDlg('dlg-crop');};
  img.onerror=function(){showMsg('Image','That file could not be read as an image.');};img.src=url;}
 (function(){var c=$('cr-cv');
- c.addEventListener('pointerdown',function(e){crop.drag={x:e.clientX,y:e.clientY,ox:crop.x,oy:crop.y};c.setPointerCapture(e.pointerId);});
- c.addEventListener('pointermove',function(e){if(!crop.drag)return;crop.x=crop.drag.ox+(e.clientX-crop.drag.x);crop.y=crop.drag.oy+(e.clientY-crop.drag.y);cclamp();cdraw();});
- c.addEventListener('pointerup',function(){crop.drag=null;});c.addEventListener('pointercancel',function(){crop.drag=null;});
- c.addEventListener('wheel',function(e){e.preventDefault();var z=$('cr-zoom');z.value=Math.max(0,Math.min(100,Number(z.value)-Math.sign(e.deltaY)*5));z.dispatchEvent(new Event('input'));},{passive:false});
+ function dist(){var k=Object.keys(ptrs);return Math.hypot(ptrs[k[0]].x-ptrs[k[1]].x,ptrs[k[0]].y-ptrs[k[1]].y);}
+ c.addEventListener('pointerdown',function(e){e.preventDefault();ptrs[e.pointerId]={x:e.clientX,y:e.clientY};try{c.setPointerCapture(e.pointerId);}catch(x){}if(Object.keys(ptrs).length===2)pinch=dist();});
+ c.addEventListener('pointermove',function(e){var p=ptrs[e.pointerId];if(!p)return;var n=Object.keys(ptrs).length;
+  if(n===1){crop.x+=e.clientX-p.x;crop.y+=e.clientY-p.y;p.x=e.clientX;p.y=e.clientY;cclamp();cdraw();}
+  else if(n===2){p.x=e.clientX;p.y=e.clientY;var d=dist();if(pinch)cscale(crop.s*d/pinch);pinch=d;}});
+ function up(e){delete ptrs[e.pointerId];pinch=0;}
+ c.addEventListener('pointerup',up);c.addEventListener('pointercancel',up);c.addEventListener('lostpointercapture',up);
+ c.addEventListener('wheel',function(e){e.preventDefault();cscale(crop.s*(e.deltaY<0?1.06:1/1.06));},{passive:false});
  $('cr-zoom').addEventListener('input',function(){cscale(crop.min*(1+Number(this.value)/100*3));});
- $('cr-ok').addEventListener('click',function(){var o=document.createElement('canvas');o.width=crop.ow;o.height=crop.oh;o.getContext('2d').drawImage(crop.img,-crop.x/crop.s,-crop.y/crop.s,crop.w/crop.s,crop.h/crop.s,0,0,crop.ow,crop.oh);var d=o.toDataURL('image/jpeg',0.88);closeAll();crop.cb(d);});
+ $('cr-ok').addEventListener('click',function(){var o=document.createElement('canvas');o.width=crop.ow;o.height=crop.oh;var g=o.getContext('2d');g.fillStyle='#000';g.fillRect(0,0,o.width,o.height);g.drawImage(crop.img,-crop.x/crop.s,-crop.y/crop.s,crop.w/crop.s,crop.h/crop.s,0,0,crop.ow,crop.oh);var d=o.toDataURL('image/jpeg',0.88);closeAll();crop.cb(d);});
 })();
 $('pf-pick').addEventListener('click',function(){$('pf-file').click();});
 $('bn-pick').addEventListener('click',function(){$('bn-file').click();});
-$('pf-file').addEventListener('change',function(){var f=this.files[0];this.value='';if(!f)return;openCrop(f,{w:300,h:300,ow:256,oh:256,round:true,title:'Crop profile picture',cb:function(d){av=d;rmAv=false;$('av-prev').innerHTML='';var i=document.createElement('img');i.className='av lg';i.src=d;$('av-prev').appendChild(i);}});});
-$('bn-file').addEventListener('change',function(){var f=this.files[0];this.value='';if(!f)return;var w=Math.min(480,Math.max(240,window.innerWidth-90));openCrop(f,{w:w,h:Math.round(w/3),ow:900,oh:300,round:false,title:'Crop banner',cb:function(d){bn=d;rmBn=false;$('bn-prev').style.background='url('+d+') center/cover';}});});
+$('pf-file').addEventListener('change',function(){var f=this.files[0];this.value='';if(!f)return;openCrop(f,{w:320,h:320,ow:256,oh:256,round:true,cb:function(d){av=d;rmAv=false;$('av-prev').innerHTML='';var i=document.createElement('img');i.className='av lg';i.src=d;$('av-prev').appendChild(i);}});});
+$('bn-file').addEventListener('change',function(){var f=this.files[0];this.value='';if(!f)return;var w=Math.min(420,Math.max(240,window.innerWidth-90));openCrop(f,{w:w,h:Math.round(w*0.4),ow:1000,oh:400,round:false,cb:function(d){bn=d;rmBn=false;$('bn-prev').style.background='url('+d+') center/cover';}});});
 $('pf-rm').addEventListener('click',function(){av=null;rmAv=true;var p=$('av-prev');p.innerHTML='';var d=document.createElement('div');d.className='av lg';d.textContent=($('pf-name').value||'?').slice(0,1).toUpperCase();p.appendChild(d);});
 $('bn-rm').addEventListener('click',function(){bn=null;rmBn=true;$('bn-prev').style.background=$('pf-accent').value;});
 $('pf-save').addEventListener('click',async function(){var b=this;b.disabled=true;
- try{var r=await fetch('/users/profile/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('pf-name').value,pronouns:$('pf-pro').value,emoji:$('pf-emoji').value,status:$('pf-status').value,bio:$('pf-bio').value,tz:$('pf-tz').value,links:$('pf-links').value,discord:$('pf-discord').value,accent:$('pf-accent').value,avatar:av,removeAvatar:rmAv,banner:bn,removeBanner:rmBn})});
+ try{var r=await fetch('/users/profile/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('pf-name').value,pronouns:$('pf-pro').value,emoji:$('pf-emoji').value,status:$('pf-status').value,bio:$('pf-bio').value,tz:$('pf-tz').value,links:$('pf-links').value,accent:$('pf-accent').value,avatar:av,removeAvatar:rmAv,banner:bn,removeBanner:rmBn})});
   var j=await r.json().catch(function(){return {};});if(r.ok){location.href='/users/profile';}else{showMsg('Could not save',j.error||'Something went wrong.');b.disabled=false;}
  }catch(e){showMsg('Could not save',e.message);b.disabled=false;}});
 `;
@@ -129,7 +133,7 @@ $('pf-save').addEventListener('click',async function(){var b=this;b.disabled=tru
     let tz = t(b.tz, 64); if (tz) { try { new Intl.DateTimeFormat("en", { timeZone: tz }); } catch { tz = ""; } }
     const links = String(b.links || "").split("\n").map((l) => l.trim()).filter((l) => /^https:\/\/[^\s]{3,200}$/i.test(l)).slice(0, 3).join("\n");
     const name = t(b.name, 32) || userOf(req.me);
-    let discord = t(b.discord, 100).replace(/^@/, ""); if (/^https?:\/\//i.test(discord) && !discordHref(discord)) discord = "";
+    
     let av = null, avType = null;
     if (typeof b.avatar === "string" && b.avatar) {
       const m = /^data:(image\/(?:jpeg|png));base64,([A-Za-z0-9+/=]+)$/.exec(b.avatar);
@@ -147,9 +151,9 @@ $('pf-save').addEventListener('click',async function(){var b=this;b.disabled=tru
       if (!bnBuf.slice(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff])) || bnBuf.length > 600 * 1024) return res.status(400).json({ error: "The banner is invalid or too large." });
     }
     try {
-      await pool.query(`INSERT INTO owner_profiles(owner_key,display_name,pronouns,bio,status_emoji,status_text,accent,timezone,links,discord,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
-        ON CONFLICT(owner_key) DO UPDATE SET display_name=$2,pronouns=$3,bio=$4,status_emoji=$5,status_text=$6,accent=$7,timezone=$8,links=$9,discord=$10,updated_at=NOW()`,
-        [req.me, name, t(b.pronouns, 24), t(b.bio, 400), t(b.emoji, 8), t(b.status, 100), accent, tz, links, discord]);
+      await pool.query(`INSERT INTO owner_profiles(owner_key,display_name,pronouns,bio,status_emoji,status_text,accent,timezone,links,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+        ON CONFLICT(owner_key) DO UPDATE SET display_name=$2,pronouns=$3,bio=$4,status_emoji=$5,status_text=$6,accent=$7,timezone=$8,links=$9,updated_at=NOW()`,
+        [req.me, name, t(b.pronouns, 24), t(b.bio, 400), t(b.emoji, 8), t(b.status, 100), accent, tz, links]);
       if (av) await pool.query("UPDATE owner_profiles SET avatar=$2, avatar_type=$3 WHERE owner_key=$1", [req.me, av, avType]);
       else if (b.removeAvatar) await pool.query("UPDATE owner_profiles SET avatar=NULL, avatar_type=NULL WHERE owner_key=$1", [req.me]);
       if (bnBuf) await pool.query("UPDATE owner_profiles SET banner=$2, banner_type='image/jpeg' WHERE owner_key=$1", [req.me, bnBuf]);
@@ -163,16 +167,16 @@ $('pf-save').addEventListener('click',async function(){var b=this;b.disabled=tru
   const hashPw = (pw) => { const salt = crypto.randomBytes(16); return `scrypt$${salt.toString("hex")}$${crypto.scryptSync(pw, salt, 32, { N: 16384, r: 8, p: 1 }).toString("hex")}`; };
   const nextSlot = () => { for (let n = 1; n <= 9; n++) if (!admins.some((a) => a.key === String(n))) return n; return 0; };
   const fullAccess = (req) => { const a = admins.find((x) => x.user === req.session.owner); return !!a && ADMIN_PERMS.every((p) => a.perms.has(p)); };
-  const PERM_LABELS = { bot: "Bot Control (status, restart, shut down)", users: "Users (expiry, add to server, DM, opt out)", servers: "Servers", dm: "DM Users", logs: "Logs" };
+  const PERM_LABELS = { bot: "Bot Control (status, restart, shut down)", users: "Users (expiry, add to server, DM, opt out)", servers: "Servers", dm: "DM Users", logs: "Logs", projects: "Side Projects" };
 
   app.get("/users/add", logged, owner, (req, res) => {
     if (!fullAccess(req)) return res.status(403).send("Only dashboard users with every permission can add users.");
     const slot = nextSlot();
-    const content = `<div class="top"><div><h1>Add user</h1><p class="muted">Give someone else access to this dashboard. Pick a username and password, then copy the values into Render.</p></div><a class="btn secondary" href="/channels/@me">Back</a></div>
+    const content = `<div class="top"><div><h1>Add user</h1></div><a class="btn secondary" href="/channels/@me">Back</a></div>
 <div class="card" style="max-width:640px">${slot ? `<label>Username</label><input id="au-user" maxlength="32" autocomplete="off" placeholder="letters, numbers, . _ -">
 <label>Password (at least 12 characters)</label><input id="au-pw" type="password" autocomplete="new-password" maxlength="128">
 <label>Repeat password</label><input id="au-pw2" type="password" autocomplete="new-password" maxlength="128">
-<label>Permissions</label><p class="muted" style="margin:0 0 6px">Messages and profiles are always available to every user.</p>${ADMIN_PERMS.map((p) => `<label style="display:flex;gap:8px;align-items:center;margin:4px 0"><input type="checkbox" class="au-perm" value="${p}" style="width:auto;margin:0"> ${esc(PERM_LABELS[p] || p)}</label>`).join("")}
+<label>Permissions</label>${ADMIN_PERMS.map((p) => `<label style="display:flex;gap:8px;align-items:center;margin:4px 0"><input type="checkbox" class="au-perm" value="${p}" style="width:auto;margin:0"> ${esc(PERM_LABELS[p] || p)}</label>`).join("")}
 <div style="margin-top:16px"><button type="button" class="green" id="au-go">Create login</button></div>
 <div id="au-out" style="display:none;margin-top:18px"><h3>Add these to Render</h3><p class="muted">Render &gt; your service &gt; Environment. Add all three variables, save, and let it redeploy. The new person can then sign in at the dashboard login with the username and password they chose. The password is not stored anywhere here, so keep it safe.</p>
 <label id="au-n1"></label><input id="au-v1" readonly onclick="this.select()">
@@ -222,7 +226,7 @@ $('au-copy').addEventListener('click',function(){var t=$('au-n1').textContent+'=
 
   app.get("/channels/@me", logged, owner, async (req, res) => {
     const rows = await Promise.all(OWNERS.filter((o) => o.key !== req.me).map(async (o) => ({ p: await getProfile(o.key), id: await convFor(req.me, o.key) })));
-    const content = `<div class="top"><div><h1>Messages</h1><p class="muted">A private chat between dashboard users. Messages are never saved: they disappear when the chat is closed.</p></div>${fullAccess(req) ? '<a class="btn" href="/users/add">Add user</a>' : ""}</div>
+    const content = `<div class="top"><div><h1>Messages</h1></div>${fullAccess(req) ? '<a class="btn" href="/users/add">Add user</a>' : ""}</div>
 <div class="card"><h2>Direct messages</h2>${rows.map((r) => `<a class="dmrow" href="/channels/@me/${esc(r.id)}">${avatar(r.p)}<div><b>${esc(r.p.name)}</b><div class="muted" style="font-size:13px">${statusLine(r.p)}</div></div></a>`).join("") || '<p class="muted">No other owner is set up yet.</p>'}</div>`;
     render(req, res, "msg", content);
   });
