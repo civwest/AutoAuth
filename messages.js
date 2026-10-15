@@ -29,10 +29,10 @@ module.exports = function mountMessages(c) {
 
   // ---------- profiles ----------
   async function getProfile(key) {
-    const r = await pool.query("SELECT display_name,pronouns,bio,status_emoji,status_text,accent,timezone,links,discord,(avatar IS NOT NULL) AS has_av,updated_at FROM owner_profiles WHERE owner_key=$1", [key]);
+    const r = await pool.query("SELECT display_name,pronouns,bio,status_emoji,status_text,accent,timezone,links,discord,(avatar IS NOT NULL) AS has_av,(banner IS NOT NULL) AS has_bn,updated_at FROM owner_profiles WHERE owner_key=$1", [key]);
     const x = r.rows[0] || {};
     return { key, user: userOf(key) || "", name: x.display_name || userOf(key) || "Owner", pronouns: x.pronouns || "", bio: x.bio || "", emoji: x.status_emoji || "", status: x.status_text || "",
-      accent: x.accent || "#7289da", tz: x.timezone || "", links: x.links || "", discord: x.discord || "", hasAv: !!x.has_av, ver: x.updated_at ? new Date(x.updated_at).getTime() : 0 };
+      accent: x.accent || "#7289da", tz: x.timezone || "", links: x.links || "", discord: x.discord || "", hasAv: !!x.has_av, hasBn: !!x.has_bn, ver: x.updated_at ? new Date(x.updated_at).getTime() : 0 };
   }
   // A Discord entry may be a user ID, a discord.com/users or discord.gg link, or just a username (shown without a link).
   const discordHref = (v) => { v = String(v || "").trim(); if (/^\d{17,20}$/.test(v)) return "https://discord.com/users/" + v; if (/^https:\/\/(discord\.com\/users\/\d{17,20}|discord\.gg\/[\w-]{2,32}|discord\.com\/invite\/[\w-]{2,32})$/i.test(v)) return v; return ""; };
@@ -46,6 +46,13 @@ module.exports = function mountMessages(c) {
     res.set({ "Content-Type": r.rows[0].avatar_type, "Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff" }).send(r.rows[0].avatar);
   });
 
+  app.get("/users/profile/banner/:key", logged, owner, async (req, res) => {
+    const r = await pool.query("SELECT banner,banner_type FROM owner_profiles WHERE owner_key=$1 AND banner IS NOT NULL", [String(req.params.key)]);
+    if (!r.rows[0]) return res.status(404).end();
+    res.set({ "Content-Type": r.rows[0].banner_type, "Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff" }).send(r.rows[0].banner);
+  });
+  const bannerStyle = (p) => p.hasBn ? `background:url(/users/profile/banner/${esc(p.key)}?v=${p.ver}) center/cover` : `background:${esc(p.accent)}`;
+
   app.get("/users/profile", logged, owner, async (req, res) => {
     const key = OWNERS.some((o) => o.key === req.query.user) ? String(req.query.user) : req.me;
     const p = await getProfile(key), mine = key === req.me;
@@ -54,7 +61,7 @@ module.exports = function mountMessages(c) {
     const links = p.links.split("\n").filter((l) => /^https?:\/\//i.test(l.trim())).slice(0, 3).map((l) => `<div><a href="${esc(l.trim())}" target="_blank" rel="noopener noreferrer nofollow" style="text-decoration:underline">${esc(l.trim())}</a></div>`).join("");
     const other = OWNERS.find((o) => o.key !== req.me);
     const content = `<div class="top"><div><h1>${mine ? "My profile" : esc(p.name)}</h1></div><div>${mine ? `<a class="btn" href="/users/profile/edit">Edit profile</a>` : `<a class="btn" href="/channels/@me">Message</a>`}</div></div>
-<div class="card" style="max-width:640px;overflow:hidden"><div class="banner" style="background:${esc(p.accent)}"></div><div style="display:flex;gap:16px;align-items:flex-end;margin-top:-48px">${avatar(p, "lg")}<div style="padding-bottom:6px"><h2 style="margin:0">${esc(p.name)}</h2><div class="muted">${esc(p.user)}${p.pronouns ? " · " + esc(p.pronouns) : ""}</div></div></div>
+<div class="card" style="max-width:640px;overflow:hidden"><div class="banner" style="${bannerStyle(p)}"></div><div style="display:flex;gap:16px;align-items:flex-end;margin-top:-48px">${avatar(p, "lg")}<div style="padding-bottom:6px"><h2 style="margin:0">${esc(p.name)}</h2><div class="muted">${esc(p.user)}${p.pronouns ? " · " + esc(p.pronouns) : ""}</div></div></div>
 <p>${p.emoji || p.status ? `${esc(p.emoji)} ${esc(p.status)}` : '<span class="muted">No status set</span>'}</p>
 ${p.discord ? `<h3>Discord</h3><p>${discordHref(p.discord) ? `<a href="${esc(discordHref(p.discord))}" target="_blank" rel="noopener noreferrer nofollow" style="text-decoration:underline">${esc(p.discord)}</a>` : esc(p.discord)}</p>` : ""}${p.bio ? `<h3>About</h3><p style="white-space:pre-wrap">${esc(p.bio)}</p>` : ""}${local ? `<h3>Local time</h3><p>${esc(local)}</p>` : ""}${links ? `<h3>Links</h3>${links}` : ""}</div>${!mine && !other ? "" : ""}`;
     render(req, res, "profile", content);
@@ -65,7 +72,10 @@ ${p.discord ? `<h3>Discord</h3><p>${discordHref(p.discord) ? `<a href="${esc(dis
     const dl = (await pool.query("SELECT discord_id,username FROM dashboard_discord WHERE owner_key=$1", [req.me])).rows[0];
     let zones = []; try { zones = Intl.supportedValuesOf("timeZone"); } catch {}
     const content = `<div class="top"><div><h1>Edit profile</h1><p class="muted">Only the owners can see this profile.</p></div><a class="btn secondary" href="/users/profile">Cancel</a></div>
-<div class="card" style="max-width:640px"><div style="display:flex;gap:16px;align-items:center"><div id="av-prev">${avatar(p, "lg")}</div><div><label style="margin:0">Profile picture</label><input type="file" id="pf-file" accept="image/png,image/jpeg,image/webp,image/gif"><label style="display:flex;gap:8px;align-items:center;margin:8px 0 0"><input type="checkbox" id="pf-rm" style="width:auto;margin:0"> Remove picture</label></div></div>
+<div class="card" style="max-width:640px"><label style="margin-top:0">Banner</label><div id="bn-prev" class="bnprev" style="${bannerStyle(p)}"></div>
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button type="button" class="secondary" id="bn-pick">Upload banner</button><button type="button" class="secondary" id="bn-rm">Remove banner</button></div>
+<input type="file" id="bn-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+<div style="display:flex;gap:16px;align-items:center;margin-top:18px"><div id="av-prev">${avatar(p, "lg")}</div><div><label style="margin:0">Profile picture</label><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px"><button type="button" class="secondary" id="pf-pick">Upload picture</button><button type="button" class="secondary" id="pf-rm">Remove picture</button></div><input type="file" id="pf-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden></div></div>
 <label>Display name</label><input id="pf-name" maxlength="32" value="${esc(p.name)}">
 <label>Pronouns</label><input id="pf-pro" maxlength="24" value="${esc(p.pronouns)}" placeholder="e.g. they/them">
 <label>Status</label><div style="display:flex;gap:8px"><input id="pf-emoji" maxlength="4" style="width:70px" value="${esc(p.emoji)}" placeholder="🙂"><input id="pf-status" maxlength="100" value="${esc(p.status)}" placeholder="What are you up to?"></div>
@@ -75,18 +85,40 @@ ${p.discord ? `<h3>Discord</h3><p>${discordHref(p.discord) ? `<a href="${esc(dis
 <label>Links (one per line, up to 3, https only)</label><textarea id="pf-links" maxlength="400" style="min-height:70px">${esc(p.links)}</textarea>
 <label>Profile colour</label><input type="color" id="pf-accent" value="${esc(p.accent)}" style="width:80px;height:40px;padding:2px">
 <div style="margin-top:16px"><button type="button" class="green" id="pf-save">Save profile</button></div></div>
-<div class="card" style="max-width:640px;margin-top:16px"><h2>Sign in with Discord</h2>${dl ? `<p>Linked to Discord account <b>${esc(dl.username || dl.discord_id)}</b> (${esc(dl.discord_id)}). You can use "Sign in with Discord" on the login page.</p><form method="post" action="/users/profile/discord-unlink"><button class="danger">Unlink Discord</button></form>` : `<p class="muted">Link your Discord account to this login so you can sign in with Discord instead of a password. Nobody can sign in with Discord unless you link it here while signed in.</p><form method="post" action="/users/profile/discord-link"><button class="green">Link Discord account</button></form>`}</div>
+<div class="card" style="max-width:640px;margin-top:16px"><h2>Sign in with Discord</h2>${dl ? `<p>Linked to Discord account <b>${esc(dl.username || dl.discord_id)}</b> (${esc(dl.discord_id)}). You can use "Sign in with Discord" on the login page.</p><form method="post" action="/users/profile/discord-unlink"><button class="danger">Unlink Discord</button></form>` : `<p class="muted">Link your Discord account to this login so you can sign in with Discord instead of a password. Nobody can sign in with Discord unless you link it here while signed in.</p><form method="post" action="/users/profile/discord-link"><button class="dbtn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="${require("./icons").discord}"/></svg>Link with Discord</button></form>`}</div>
+<dialog id="dlg-crop"><div class="dlg-top"><h2 id="cr-title" style="margin:0">Crop</h2><button type="button" class="secondary" onclick="closeAll()">Cancel</button></div><p class="muted">Drag the image to position it and use the slider to zoom.</p>
+<div style="display:flex;justify-content:center"><div class="crop-wrap" id="cr-wrap"><canvas id="cr-cv"></canvas><div class="crop-mask" id="cr-mask"></div></div></div>
+<input type="range" id="cr-zoom" min="0" max="100" value="0" style="margin-top:14px"><div style="margin-top:12px"><button type="button" class="green" id="cr-ok">Use this crop</button></div></dialog>
 <script>${EDIT_JS}</script>`;
     render(req, res, "profile", content);
   });
 
   const EDIT_JS = `
-var $=function(i){return document.getElementById(i);};var av=null;
-$('pf-file').addEventListener('change',function(){var f=this.files[0];if(!f)return;
- var img=new Image(),url=URL.createObjectURL(f);img.onload=function(){var s=256,cv=document.createElement('canvas');cv.width=s;cv.height=s;var cx=cv.getContext('2d');var m=Math.min(img.width,img.height);cx.drawImage(img,(img.width-m)/2,(img.height-m)/2,m,m,0,0,s,s);av=cv.toDataURL('image/jpeg',0.88);$('av-prev').innerHTML='';var i=document.createElement('img');i.className='av lg';i.src=av;$('av-prev').appendChild(i);URL.revokeObjectURL(url);};
- img.onerror=function(){showMsg('Profile picture','That file could not be read as an image.');};img.src=url;});
+var $=function(i){return document.getElementById(i);};var av=null,bn=null,rmAv=false,rmBn=false;
+var crop={img:null,s:1,min:1,x:0,y:0,w:300,h:300,ow:256,oh:256,cb:null,drag:null};
+function cdraw(){var c=$('cr-cv'),g=c.getContext('2d');g.clearRect(0,0,crop.w,crop.h);g.drawImage(crop.img,crop.x,crop.y,crop.img.width*crop.s,crop.img.height*crop.s);}
+function cclamp(){crop.x=Math.min(0,Math.max(crop.w-crop.img.width*crop.s,crop.x));crop.y=Math.min(0,Math.max(crop.h-crop.img.height*crop.s,crop.y));}
+function cscale(ns){var cx=crop.w/2,cy=crop.h/2,r=ns/crop.s;crop.x=cx-(cx-crop.x)*r;crop.y=cy-(cy-crop.y)*r;crop.s=ns;cclamp();cdraw();}
+function openCrop(file,o){var img=new Image(),url=URL.createObjectURL(file);
+ img.onload=function(){crop.img=img;crop.w=o.w;crop.h=o.h;crop.ow=o.ow;crop.oh=o.oh;crop.cb=o.cb;var c=$('cr-cv');c.width=o.w;c.height=o.h;$('cr-wrap').style.width=o.w+'px';$('cr-wrap').style.height=o.h+'px';$('cr-mask').className='crop-mask'+(o.round?' round':'');$('cr-title').textContent=o.title;
+  crop.min=Math.max(o.w/img.width,o.h/img.height);crop.s=crop.min;crop.x=(o.w-img.width*crop.s)/2;crop.y=(o.h-img.height*crop.s)/2;$('cr-zoom').value=0;cdraw();closeAll();openDlg('dlg-crop');};
+ img.onerror=function(){showMsg('Image','That file could not be read as an image.');};img.src=url;}
+(function(){var c=$('cr-cv');
+ c.addEventListener('pointerdown',function(e){crop.drag={x:e.clientX,y:e.clientY,ox:crop.x,oy:crop.y};c.setPointerCapture(e.pointerId);});
+ c.addEventListener('pointermove',function(e){if(!crop.drag)return;crop.x=crop.drag.ox+(e.clientX-crop.drag.x);crop.y=crop.drag.oy+(e.clientY-crop.drag.y);cclamp();cdraw();});
+ c.addEventListener('pointerup',function(){crop.drag=null;});c.addEventListener('pointercancel',function(){crop.drag=null;});
+ c.addEventListener('wheel',function(e){e.preventDefault();var z=$('cr-zoom');z.value=Math.max(0,Math.min(100,Number(z.value)-Math.sign(e.deltaY)*5));z.dispatchEvent(new Event('input'));},{passive:false});
+ $('cr-zoom').addEventListener('input',function(){cscale(crop.min*(1+Number(this.value)/100*3));});
+ $('cr-ok').addEventListener('click',function(){var o=document.createElement('canvas');o.width=crop.ow;o.height=crop.oh;o.getContext('2d').drawImage(crop.img,-crop.x/crop.s,-crop.y/crop.s,crop.w/crop.s,crop.h/crop.s,0,0,crop.ow,crop.oh);var d=o.toDataURL('image/jpeg',0.88);closeAll();crop.cb(d);});
+})();
+$('pf-pick').addEventListener('click',function(){$('pf-file').click();});
+$('bn-pick').addEventListener('click',function(){$('bn-file').click();});
+$('pf-file').addEventListener('change',function(){var f=this.files[0];this.value='';if(!f)return;openCrop(f,{w:300,h:300,ow:256,oh:256,round:true,title:'Crop profile picture',cb:function(d){av=d;rmAv=false;$('av-prev').innerHTML='';var i=document.createElement('img');i.className='av lg';i.src=d;$('av-prev').appendChild(i);}});});
+$('bn-file').addEventListener('change',function(){var f=this.files[0];this.value='';if(!f)return;var w=Math.min(480,Math.max(240,window.innerWidth-90));openCrop(f,{w:w,h:Math.round(w/3),ow:900,oh:300,round:false,title:'Crop banner',cb:function(d){bn=d;rmBn=false;$('bn-prev').style.background='url('+d+') center/cover';}});});
+$('pf-rm').addEventListener('click',function(){av=null;rmAv=true;var p=$('av-prev');p.innerHTML='';var d=document.createElement('div');d.className='av lg';d.textContent=($('pf-name').value||'?').slice(0,1).toUpperCase();p.appendChild(d);});
+$('bn-rm').addEventListener('click',function(){bn=null;rmBn=true;$('bn-prev').style.background=$('pf-accent').value;});
 $('pf-save').addEventListener('click',async function(){var b=this;b.disabled=true;
- try{var r=await fetch('/users/profile/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('pf-name').value,pronouns:$('pf-pro').value,emoji:$('pf-emoji').value,status:$('pf-status').value,bio:$('pf-bio').value,tz:$('pf-tz').value,links:$('pf-links').value,discord:$('pf-discord').value,accent:$('pf-accent').value,avatar:av,removeAvatar:$('pf-rm').checked})});
+ try{var r=await fetch('/users/profile/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('pf-name').value,pronouns:$('pf-pro').value,emoji:$('pf-emoji').value,status:$('pf-status').value,bio:$('pf-bio').value,tz:$('pf-tz').value,links:$('pf-links').value,discord:$('pf-discord').value,accent:$('pf-accent').value,avatar:av,removeAvatar:rmAv,banner:bn,removeBanner:rmBn})});
   var j=await r.json().catch(function(){return {};});if(r.ok){location.href='/users/profile';}else{showMsg('Could not save',j.error||'Something went wrong.');b.disabled=false;}
  }catch(e){showMsg('Could not save',e.message);b.disabled=false;}});
 `;
@@ -107,12 +139,21 @@ $('pf-save').addEventListener('click',async function(){var b=this;b.disabled=tru
       if (!okMagic || buf.length > 400 * 1024) return res.status(400).json({ error: "The picture is invalid or too large." });
       av = buf; avType = m[1];
     }
+    let bnBuf = null;
+    if (typeof b.banner === "string" && b.banner) {
+      const mm = /^data:(image\/jpeg);base64,([A-Za-z0-9+/=]+)$/.exec(b.banner);
+      if (!mm) return res.status(400).json({ error: "Unsupported banner format." });
+      bnBuf = Buffer.from(mm[2], "base64");
+      if (!bnBuf.slice(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff])) || bnBuf.length > 600 * 1024) return res.status(400).json({ error: "The banner is invalid or too large." });
+    }
     try {
       await pool.query(`INSERT INTO owner_profiles(owner_key,display_name,pronouns,bio,status_emoji,status_text,accent,timezone,links,discord,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
         ON CONFLICT(owner_key) DO UPDATE SET display_name=$2,pronouns=$3,bio=$4,status_emoji=$5,status_text=$6,accent=$7,timezone=$8,links=$9,discord=$10,updated_at=NOW()`,
         [req.me, name, t(b.pronouns, 24), t(b.bio, 400), t(b.emoji, 8), t(b.status, 100), accent, tz, links, discord]);
       if (av) await pool.query("UPDATE owner_profiles SET avatar=$2, avatar_type=$3 WHERE owner_key=$1", [req.me, av, avType]);
       else if (b.removeAvatar) await pool.query("UPDATE owner_profiles SET avatar=NULL, avatar_type=NULL WHERE owner_key=$1", [req.me]);
+      if (bnBuf) await pool.query("UPDATE owner_profiles SET banner=$2, banner_type='image/jpeg' WHERE owner_key=$1", [req.me, bnBuf]);
+      else if (b.removeBanner) await pool.query("UPDATE owner_profiles SET banner=NULL, banner_type=NULL WHERE owner_key=$1", [req.me]);
       res.json({ ok: true });
     } catch (e) { console.error("Profile save failed", e.message); res.status(500).json({ error: "Could not save your profile." }); }
   });

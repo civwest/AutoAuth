@@ -1,11 +1,10 @@
-// Authorization flow: /auth page (three options, each with an agreement popup + captcha),
-// /auth/captcha, /auth/start, and /oauth/callback.
+// Authorization flow: /auth page (three options, each with an agreement popup),
+// /auth/start, and /oauth/callback.
 //
 // Security notes:
-//  - The Discord "state" is signed (HMAC) and carries the chosen mode + expiry, so the callback only
-//    accepts flows that were started from this site after the agreement and captcha were completed.
-//  - The captcha is built in (no third-party service). Its answer is never sent to the browser; the
-//    token is an HMAC of the answer and every token is single-use.
+//  - The Discord "state" is signed (HMAC) and carries the chosen mode + expiry. Plain Discord authorize
+//    links (no state) are also accepted; the mode is then worked out from the granted scopes.
+//  - There is no captcha. Attempts are rate limited per IP.
 const crypto = require("node:crypto");
 
 // scope strings and whether the user-install integration type is used
@@ -14,15 +13,14 @@ const MODES = {
   dm: { code: "d", scope: ["identify", "guilds", "applications.commands"], userInstall: true },
   optout: { code: "o", scope: ["identify"], userInstall: false },
   all: { code: "a", scope: ["identify", "guilds.join", "guilds", "applications.commands"], userInstall: true },
-  link: { code: "k", scope: ["identify", "guilds", "guilds.members.read"], userInstall: false }, // links a Discord account to a dashboard login
-  login: { code: "l", scope: ["identify", "guilds", "guilds.members.read"], userInstall: false }, // dashboard sign-in with a linked Discord account
+  link: { code: "k", scope: ["identify", "guilds", "guilds.members.read"], userInstall: false, dash: true }, // links a Discord account to a dashboard login (uses the separate login callback URL)
 };
 const BY_CODE = Object.fromEntries(Object.entries(MODES).map(([k, v]) => [v.code, k]));
 
 module.exports = function mountAuth(app, ctx) {
-  const { site, pool, enc, log, equal, verifyOrigin, optOutUser, dashDiscord } = ctx;
+  const { site, pool, enc, log, equal, verifyOrigin, optOutUser, dashDiscord, loginRedirect } = ctx;
   const secret = process.env.SESSION_SECRET;
-  const used = new Map(); // nonce -> expiry (single-use state + captcha tokens)
+  const used = new Map(); // nonce -> expiry (single-use state tokens)
   const hits = new Map(); // rate limiting
 
   const hmac = (s) => crypto.createHmac("sha256", secret).update(s).digest("hex");
@@ -55,42 +53,15 @@ module.exports = function mountAuth(app, ctx) {
     const m = MODES[mode], u = new URL("https://discord.com/oauth2/authorize");
     u.searchParams.set("client_id", process.env.CLIENT_ID);
     u.searchParams.set("response_type", "code");
-    u.searchParams.set("redirect_uri", process.env.REDIRECT_URI);
+    u.searchParams.set("redirect_uri", m.dash ? loginRedirect : process.env.REDIRECT_URI);
     if (m.userInstall) u.searchParams.set("integration_type", "1");
     u.searchParams.set("scope", m.scope.join(" "));
     u.searchParams.set("state", makeState(mode));
     return u.toString();
   }
 
-  // ---- captcha ----
-  const CH = "ACDEFHJKMNPRTUVWXY34679"; // no look-alike characters
-  const rnd = (a, b) => a + (crypto.randomInt(0, 10000) / 10000) * (b - a);
-  function captchaSvg(text) {
-    const col = () => `rgb(${Math.floor(rnd(10, 80))},${Math.floor(rnd(10, 80))},${Math.floor(rnd(10, 80))})`;
-    let s = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="64" viewBox="0 0 200 64" role="img" aria-label="Captcha image"><rect width="200" height="64" rx="8" fill="#f3f4f6"/>`;
-    for (let i = 0; i < 3; i++) s += `<path d="M${rnd(0, 20).toFixed(1)} ${rnd(5, 59).toFixed(1)} C ${rnd(50, 90).toFixed(1)} ${rnd(0, 64).toFixed(1)}, ${rnd(110, 150).toFixed(1)} ${rnd(0, 64).toFixed(1)}, ${rnd(180, 200).toFixed(1)} ${rnd(5, 59).toFixed(1)}" stroke="${col()}" stroke-width="1.4" fill="none" opacity=".65"/>`;
-    [...text].forEach((ch, i) => {
-      const x = 22 + i * 32;
-      s += `<text x="${x}" y="${rnd(38, 48).toFixed(1)}" font-family="monospace" font-size="${rnd(34, 38).toFixed(1)}" font-weight="700" fill="${col()}" transform="rotate(${rnd(-9, 9).toFixed(1)} ${x} 40)">${ch}</text>`;
-    });
-    for (let i = 0; i < 12; i++) s += `<circle cx="${rnd(0, 200).toFixed(1)}" cy="${rnd(0, 64).toFixed(1)}" r="${rnd(0.6, 1.4).toFixed(1)}" fill="${col()}" opacity=".7"/>`;
-    return s + "</svg>";
-  }
-  function newCaptcha() {
-    const text = Array.from({ length: 5 }, () => CH[crypto.randomInt(CH.length)]).join("");
-    const nonce = crypto.randomBytes(8).toString("hex"), exp = Date.now() + 5 * 60 * 1000;
-    return { token: `${nonce}.${exp}.${hmac(`captcha:${text}:${nonce}:${exp}`)}`, svg: captchaSvg(text) };
-  }
-  function checkCaptcha(token, answer) {
-    const [nonce, exp, sig] = String(token || "").split(".");
-    if (!nonce || !exp || !sig || !(Number(exp) > Date.now()) || used.has("c" + nonce)) return false;
-    used.set("c" + nonce, Number(exp)); // consumed on every attempt, right or wrong
-    return equal(sig, hmac(`captcha:${String(answer || "").trim().toUpperCase()}:${nonce}:${exp}`));
-  }
-
   // ---- pages ----
   const ERRORS = {
-    captcha: "That captcha answer was not correct. Please try again.",
     agree: "You need to tick the agreement box to continue.",
     rate: "Too many attempts. Please wait a few minutes and try again.",
   };
@@ -99,14 +70,14 @@ module.exports = function mountAuth(app, ctx) {
     const err = ERRORS[req.query.error] ? `<div class="banner">${ERRORS[req.query.error]}</div>` : "";
     const reopen = ["server", "dm", "all"].includes(req.query.mode) && ERRORS[req.query.error] ? req.query.mode : "";
     res.set("Cache-Control", "no-store").send(site.page("Authorization", `<h1>Authorization</h1>
-<p class="lead">Choose what you want to allow. You will read and agree to the details, complete a quick check, and then approve on Discord.</p>
+<p class="lead">Choose what you want to allow. You will read and agree to the details, and then approve on Discord.</p>
 ${err}
 <div class="authgrid">
 <button type="button" class="authopt" onclick="openAgree('server')"><b>Allow Server Joins</b><span>Let server admins and the owners add you to servers that use AutoAuth.</span></button>
 <button type="button" class="authopt" onclick="openAgree('dm')"><b>Allow Direct Messages</b><span>Let the owners send you DMs through the bot. Installs AutoAuth to your account.</span></button>
 <button type="button" class="authopt" onclick="openAgree('all')"><b>Allow Both</b><span>Server joins and direct messages in one approval.</span></button>
 </div>
-<noscript><p class="banner">JavaScript is required for the captcha on this page.</p></noscript>
+<noscript><p class="banner">JavaScript is required to open the agreement on this page.</p></noscript>
 <p class="updated">Already authorized? Opt out any time on the <a href="/optout">opt-out page</a> or with <code>/optout</code> in Discord to opt out of servers, DMs or everything. AutoAuth is an independent project run by ${process.env.SITE_OPERATOR || "the site owner"} and is not affiliated with Discord Inc.</p>
 <dialog class="dlg" id="agree">
 <form method="post" action="/auth/start" id="agree-form">
@@ -115,9 +86,6 @@ ${err}
 <ul class="agree-list" id="ag-list"></ul>
 <input type="hidden" name="mode" id="ag-mode">
 <label class="chk"><input type="checkbox" name="agree" value="yes" id="ag-chk" required><span>I have read and agree to the <a href="/terms-of-service" target="_blank">Terms of Service</a> and <a href="/privacy-policy" target="_blank">Privacy Policy</a>, and I consent to the above.</span></label>
-<p style="margin:12px 0 4px"><b>Quick check</b>: type the characters you see.</p>
-<div class="capbox"><div id="cap-img"></div><input name="answer" id="cap-ans" autocomplete="off" maxlength="8" required aria-label="Captcha answer" autocapitalize="characters" spellcheck="false" placeholder="Type the 5 characters"><button type="button" class="linkbtn" onclick="loadCaptcha()">New image</button></div>
-<input type="hidden" name="token" id="cap-token">
 <div class="btns"><button class="btn green" type="submit">I agree, continue to Discord</button><button type="button" class="btn gray" onclick="closeDlg('agree')">Cancel</button></div>
 </form></dialog>
 <script>
@@ -127,15 +95,9 @@ var MODES={
  all:{t:'Allow server joins and direct messages',l:['AutoAuth stores your Discord username and ID, and encrypted access tokens.','Server administrators and the AutoAuth owners can add you to servers where AutoAuth is installed, and the owners can remove you from them.','AutoAuth is installed to your Discord account, and the owners can send you direct messages, which may include attachments.']}
 };
 var COMMON='You can opt out at any time with /optout in Discord. Your authorization stays active until you opt out, unless the owners set an expiry.';
-async function loadCaptcha(){var i=document.getElementById('cap-img');i.textContent='Loading…';try{var r=await fetch('/auth/captcha',{cache:'no-store'});var j=await r.json();if(!r.ok||!j.svg){i.textContent=r.status===429?'Too many captcha requests. Wait a minute, then press New image.':'Could not load the captcha. Press New image.';document.getElementById('cap-token').value='';return;}i.innerHTML=j.svg;clearTimeout(window.capT);window.capT=setTimeout(loadCaptcha,4*60*1000);document.getElementById('cap-token').value=j.token;document.getElementById('cap-ans').value='';}catch(e){i.textContent='Could not load the captcha. Reload the page.';}}
-function openAgree(m){var d=MODES[m];if(!d)return;document.getElementById('ag-title').textContent=d.t;var ul=document.getElementById('ag-list');ul.innerHTML='';d.l.concat([COMMON]).forEach(function(x){var li=document.createElement('li');li.textContent=x;ul.appendChild(li);});document.getElementById('ag-mode').value=m;document.getElementById('ag-chk').checked=false;loadCaptcha();openDlg('agree');}
+function openAgree(m){var d=MODES[m];if(!d)return;document.getElementById('ag-title').textContent=d.t;var ul=document.getElementById('ag-list');ul.innerHTML='';d.l.concat([COMMON]).forEach(function(x){var li=document.createElement('li');li.textContent=x;ul.appendChild(li);});document.getElementById('ag-mode').value=m;document.getElementById('ag-chk').checked=false;openDlg('agree');}
 ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${JSON.stringify(reopen)});});` : ""}
 </script>`, "auth"));
-  });
-
-  app.get("/auth/captcha", (req, res) => {
-    if (limited("cap:" + (req.ip || "?"), 150, 10 * 60 * 1000)) return res.status(429).json({ error: "rate" });
-    res.set("Cache-Control", "no-store").json(newCaptcha());
   });
 
   app.post("/auth/start", verifyOrigin, async (req, res) => {
@@ -143,7 +105,6 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
     if (!MODES[mode]) return res.redirect(303, "/auth");
     if (limited("start:" + ip, 40, 10 * 60 * 1000)) return res.redirect(303, `/auth?error=rate&mode=${mode}`);
     if (body.agree !== "yes") return res.redirect(303, `/auth?error=agree&mode=${mode}`);
-    if (!checkCaptcha(body.token, body.answer)) return res.redirect(303, `/auth?error=captcha&mode=${mode}`);
     await log("auth_flow_started", { mode });
     const url = discordUrl(mode);
     // Backup copy of the state: some Discord install flows return without it.
@@ -183,6 +144,26 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
     req.session.save(() => res.set("Cache-Control", "no-store").redirect(303, discordUrl("link")));
   });
 
+  // Dashboard sign-in with Discord has its own callback URL (LOGIN_REDIRECT_URI, default /login/callback). Add it under OAuth2 > Redirects in the Developer Portal.
+  app.get(new URL(loginRedirect).pathname, async (req, res) => {
+    res.set({ "Referrer-Policy": "no-referrer", "Cache-Control": "no-store" });
+    const fail = (msg, status) => res.status(status || 400).send(site.page("Dashboard sign-in", `<h1>Could not sign in</h1><p>${msg}</p><p><a class="cta" href="/login">Back to the dashboard login</a></p>`, "auth"));
+    const { code, error } = req.query;
+    if (error) return res.redirect(303, "/login");
+    if (typeof code !== "string" || !code) return fail("Discord did not return a code. Please try again.");
+    const mode = typeof req.query.state === "string" && req.query.state && consumeState(req.query.state) === "link" ? "link" : "login";
+    try {
+      const r = await fetch("https://discord.com/api/v10/oauth2/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: process.env.CLIENT_ID, client_secret: process.env.CLIENT_SECRET, grant_type: "authorization_code", code, redirect_uri: loginRedirect }) });
+      const t = await r.json();
+      if (!r.ok) { await log("dashboard_discord_exchange_failed", { status: r.status, error: t.error }); return fail("Discord rejected the sign-in. Make sure the login callback URL is added in the Developer Portal, then try again.", 502); }
+      const ur = await fetch("https://discord.com/api/v10/users/@me", { headers: { Authorization: `Bearer ${t.access_token}` } }), u = await ur.json();
+      if (!ur.ok || !u.id) return fail("Discord did not return your account details. Please try again.", 502);
+      const out = await dashDiscord(req, u, mode, t);
+      if (out.redirect) return res.redirect(303, out.redirect);
+      return res.status(out.status || 403).send(site.page("Dashboard sign-in", `<h1>${out.title || "Could not sign in"}</h1><p>${out.error}</p><p><a class="cta" href="/login">Go to the dashboard login</a></p>`, "auth"));
+    } catch (e) { console.error(e); await log("dashboard_discord_error", { error: e.message }); return fail("Something went wrong. Please try again.", 500); }
+  });
+
   // Old direct link now just leads to the page.
   app.get("/auth/start", (_, res) => res.redirect(302, "/auth"));
 
@@ -204,7 +185,7 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
     // A plain Discord authorize link (no state from this site) is fine: the mode is worked out from the scopes Discord granted.
     if (typeof code !== "string" || !code) {
       await log("oauth_invalid_state", { has_code: !!code, has_state: typeof req.query.state === "string", has_cookie: !!cookieState, reason: why, keys: Object.keys(req.query).join(",").slice(0, 100) });
-      return res.status(400).send(site.page("Start from the website", `<h1>Please start from the website</h1><p>For security, authorization has to be started from the <a href="/auth">Authorization page</a>, where you read the details and complete a quick check. This link is invalid, expired, or was already used.</p><p class="muted" style="font-size:12px">Reason: ${why.replace(/[<>&"']/g, "")}.</p>${retry}`, "auth"));
+      return res.status(400).send(site.page("Authorization incomplete", `<h1>Authorization incomplete</h1><p>Discord did not send back an authorization code, so nothing was saved. Please try again from the <a href="/auth">Authorization page</a> or with one of the authorization links.</p><p class="muted" style="font-size:12px">Reason: ${why.replace(/[<>&"']/g, "")}.</p>${retry}`, "auth"));
     }
     try {
       const r = await fetch("https://discord.com/api/v10/oauth2/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: process.env.CLIENT_ID, client_secret: process.env.CLIENT_SECRET, grant_type: "authorization_code", code, redirect_uri: process.env.REDIRECT_URI }) });
@@ -216,18 +197,11 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
       if (!mode) {
         mode = grantedScopes.includes("guilds.join") && grantedScopes.includes("applications.commands") ? "all"
           : grantedScopes.includes("guilds.join") ? "server"
-          : grantedScopes.includes("applications.commands") ? "dm"
-          : grantedScopes.includes("guilds.members.read") ? "login" : null;
+          : grantedScopes.includes("applications.commands") ? "dm" : null;
         if (!mode) {
           fetch("https://discord.com/api/v10/oauth2/token/revoke", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: process.env.CLIENT_ID, client_secret: process.env.CLIENT_SECRET, token: t.access_token, token_type_hint: "access_token" }) }).catch(() => {});
-          return res.status(400).send(site.page("Nothing was enabled", `<h1>Nothing was enabled</h1><p>That link did not grant any AutoAuth permission. To opt out, use the <a href="/optout">opt-out page</a>.</p>${retry}`, "auth"));
+          return res.status(400).send(site.page("Nothing was enabled", `<h1>Nothing was enabled</h1><p>That link did not grant any AutoAuth permission. To opt out, use the <a href="/optout">opt-out page</a>. To sign in to the dashboard use the <a href="/login">login page</a>.</p>${retry}`, "auth"));
         }
-      }
-      if (mode === "login" || mode === "link") {
-        // Dashboard sign-in / account linking. The (guilds-only) token is kept encrypted for a linked login so the Servers page can list servers.
-        const out = await dashDiscord(req, u, mode, t);
-        if (out.redirect) return res.redirect(303, out.redirect);
-        return res.status(out.status || 403).send(site.page("Dashboard sign-in", `<h1>${out.title || "Could not sign in"}</h1><p>${out.error}</p><p><a class="cta" href="/login">Go to the dashboard login</a></p>`, "auth"));
       }
       if (mode === "optout") {
         // Identity only: revoke this temporary token straight away, nothing is stored.

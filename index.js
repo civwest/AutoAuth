@@ -80,13 +80,15 @@ async function schema() {
  CREATE TABLE IF NOT EXISTS bot_dms(id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, username TEXT, avatar_url TEXT, direction TEXT NOT NULL, sender TEXT, content TEXT NOT NULL DEFAULT '', attachments JSONB NOT NULL DEFAULT '[]'::jsonb, mutual BOOLEAN NOT NULL DEFAULT FALSE, authorized BOOLEAN NOT NULL DEFAULT FALSE, is_read BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  ALTER TABLE bot_dms ADD COLUMN IF NOT EXISTS mutual_guild TEXT;
  DROP TABLE IF EXISTS role_links, role_defs, role_assign, twitch_links;
- ALTER TABLE owner_profiles ADD COLUMN IF NOT EXISTS discord TEXT;
  CREATE TABLE IF NOT EXISTS dashboard_discord(owner_key TEXT PRIMARY KEY, discord_id TEXT UNIQUE NOT NULL, username TEXT, linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  ALTER TABLE dashboard_discord ADD COLUMN IF NOT EXISTS access_token_enc TEXT;
  ALTER TABLE dashboard_discord ADD COLUMN IF NOT EXISTS refresh_token_enc TEXT;
  ALTER TABLE dashboard_discord ADD COLUMN IF NOT EXISTS expires_at BIGINT;
  CREATE INDEX IF NOT EXISTS bot_dms_user_idx ON bot_dms(user_id, id);
  CREATE TABLE IF NOT EXISTS owner_profiles(owner_key TEXT PRIMARY KEY, display_name TEXT, pronouns TEXT, bio TEXT, status_emoji TEXT, status_text TEXT, accent TEXT, timezone TEXT, links TEXT, avatar BYTEA, avatar_type TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ ALTER TABLE owner_profiles ADD COLUMN IF NOT EXISTS discord TEXT;
+ ALTER TABLE owner_profiles ADD COLUMN IF NOT EXISTS banner BYTEA;
+ ALTER TABLE owner_profiles ADD COLUMN IF NOT EXISTS banner_type TEXT;
  CREATE TABLE IF NOT EXISTS owner_dms(id TEXT PRIMARY KEY, owner_a TEXT NOT NULL, owner_b TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(owner_a, owner_b));`);
 }
 function deviceFingerprint(req) {
@@ -235,6 +237,7 @@ const site=require("./site")(app,client,getStats,()=>discordState); // public si
 app.get("/health",(_,res)=>res.send("ok"));
 // Discord domain verification (Discord > Settings > Domains asks you to serve this value at /.well-known/discord)
 app.get("/.well-known/discord",(req,res)=>{ const v=(process.env.DISCORD_DOMAIN_VERIFICATION||"").trim(); if(!/^dh=[0-9a-f]{20,64}$/i.test(v)) return res.status(404).type("text/plain").send("Not found"); res.type("text/plain").send(v); });
+const LOGIN_REDIRECT=(()=>{ try{ return new URL(process.env.LOGIN_REDIRECT_URI||"/login/callback",process.env.REDIRECT_URI).href; }catch{ return ""; } })();
 // Dashboard sign-in with Discord: a Discord account can be linked to a dashboard login from the profile edit page.
 // Servers the signed-in dashboard user's linked Discord account can add bots to (Manage Server / Administrator / owner), cached for a minute.
 const guildCache=new Map();
@@ -292,10 +295,10 @@ async function dashDiscord(req,u,intent,t){
  await log("dashboard_login_success",{method:"discord",session_ttl_minutes:120,device_bound:true},owner.user);
  return {redirect:"/dashboard"};
 }
-require("./auth")(app,{site,pool,enc,log,equal,verifyOrigin,optOutUser,dashDiscord}); // /auth, /auth/captcha, /auth/start, /oauth/callback
+require("./auth")(app,{site,pool,enc,log,equal,verifyOrigin,optOutUser,dashDiscord,loginRedirect:LOGIN_REDIRECT}); // /auth, /auth/start, /oauth/callback
 
 const DISCORD_PATH=require("./icons").discord;
-function discordLoginUrl(){ const u=new URL("https://discord.com/oauth2/authorize"); u.searchParams.set("client_id",process.env.CLIENT_ID); u.searchParams.set("response_type","code"); u.searchParams.set("redirect_uri",process.env.REDIRECT_URI); u.searchParams.set("scope","identify guilds guilds.members.read"); return u.toString(); }
+function discordLoginUrl(){ const u=new URL("https://discord.com/oauth2/authorize"); u.searchParams.set("client_id",process.env.CLIENT_ID); u.searchParams.set("response_type","code"); u.searchParams.set("redirect_uri",LOGIN_REDIRECT); u.searchParams.set("scope","identify guilds guilds.members.read"); return u.toString(); }
 app.get("/dashboard/login",(req,res)=>res.redirect(302,"/login"));
 app.get("/login",(req,res)=>{
  if(req.session.owner)return res.redirect(safeNext(req.query.next)||"/dashboard");
@@ -305,7 +308,7 @@ app.post("/login",async(req,res)=>{
  const ip=req.ip||"unknown", a=attempts.get(ip)||{n:0,until:0};
  if(a.until>Date.now())return res.status(429).send("Too many login attempts. Try again later.");
  const user=String(req.body.username||""),pw=String(req.body.password||"");
- const owner=owners.find(o=>equal(o.user,user)&&verify(pw,o.hash));
+ const owner=owners.find(o=>equal(o.user.toLowerCase(),user.trim().toLowerCase())&&verify(pw,o.hash)); // usernames are not case sensitive
  if(!owner){a.n++;if(a.n>=8){a.n=0;a.until=Date.now()+15*60*1000;}attempts.set(ip,a);await log("dashboard_login_failed",{username:user.slice(0,80),ip});return res.redirect(303,"/login?error=1"+(safeNext(req.body.next)?"&next="+encodeURIComponent(safeNext(req.body.next)):""));}
  attempts.delete(ip);req.session.regenerate(async err=>{if(err)return res.status(500).send("Session error");req.session.owner=owner.user;req.session.deviceFingerprint=deviceFingerprint(req);req.session.createdAt=Date.now();await log("dashboard_login_success",{ip,session_ttl_minutes:120,device_bound:true},owner.user);res.redirect(303,safeNext(req.body.next)||"/dashboard");});
 });

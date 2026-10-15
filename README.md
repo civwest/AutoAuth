@@ -21,7 +21,7 @@ No IDs, names, links or invite URLs live in the code. Everything personal comes 
 1. **Bot tab:** create the bot and copy the token, which becomes `BOT_TOKEN`. No privileged intents are needed.
 2. **General Information:** copy the **Application ID** (`CLIENT_ID`).
 3. **OAuth2 tab:** copy the **Client Secret** (`CLIENT_SECRET`).
-4. **OAuth2 > Redirects:** add exactly `https://YOUR-SITE/oauth/callback` (for example `https://autoauth.cfd/oauth/callback`). It must match `REDIRECT_URI` character for character.
+4. **OAuth2 > Redirects:** add exactly `https://YOUR-SITE/oauth/callback` (for example `https://autoauth.cfd/oauth/callback`). It must match `REDIRECT_URI` character for character. Also add a second redirect for dashboard sign-in with Discord: `https://YOUR-SITE/login/callback` (it must match `LOGIN_REDIRECT_URI` if you set it).
 5. **Installation tab:** enable **User Install** (needed for the DM authorization option) and **Guild Install**.
 6. Optionally restrict who can add the bot: untick **Public Bot** on the Bot tab.
 
@@ -46,7 +46,8 @@ No IDs, names, links or invite URLs live in the code. Everything personal comes 
 | `REDIRECT_URI` | `https://YOUR-SITE/oauth/callback`. Your site is the address Render shows at the top of the web service (`https://something.onrender.com`) or your custom domain. The public site address and legal text also follow this value. |
 | `DATABASE_URL` | Render PostgreSQL > Connections > Internal Database URL |
 | `TOKEN_ENCRYPTION_KEY` | 64 hex characters. Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. **Never change it later or saved tokens become unreadable.** |
-| `SESSION_SECRET` | Any long random string (also signs auth links and captchas). Changing it invalidates in-flight sign-ins. |
+| `LOGIN_REDIRECT_URI` | Optional. Redirect used only for signing in to the dashboard with Discord and linking a Discord account. Defaults to `https://YOUR-SITE/login/callback` (your `REDIRECT_URI` host). Add the same URL under OAuth2 > Redirects in the Developer Portal. |
+| `SESSION_SECRET` | Any long random string (also signs auth and opt-out links). Changing it invalidates in-flight sign-ins. |
 | `DASHBOARD_ADMIN1_USER` | Username for the first dashboard login (you choose it, 3 to 32 letters, numbers, `.`, `_` or `-`). See "Dashboard logins" below. |
 | `DASHBOARD_ADMIN1_PASSWORD_HASH` | The scrypt hash of that login's password (`scrypt$<salt>$<hash>`). See "Dashboard logins" below. |
 | `DASHBOARD_ADMIN1_PERMISSIONS` | What that login may use: `all`, `none`, or a comma list of `bot,users,servers,dm,logs`. Leave it out and the login can only use Messages. Give at least one login `all`. (A login defined with the older `DASHBOARD_OWNERn_USER` / `DASHBOARD_OWNERn_PASSWORD_HASH` names is an owner and has every permission unless you set `PERMISSIONS`.) |
@@ -97,7 +98,7 @@ These Discord links work from anywhere (a message, a bio, another site). AutoAut
 - Server joins: `https://discord.com/oauth2/authorize?client_id=CLIENT_ID&response_type=code&redirect_uri=https%3A%2F%2FYOUR-SITE%2Foauth%2Fcallback&scope=identify+guilds.join+guilds`
 - Server joins and DMs: `https://discord.com/oauth2/authorize?client_id=CLIENT_ID&response_type=code&redirect_uri=https%3A%2F%2FYOUR-SITE%2Foauth%2Fcallback&integration_type=1&scope=identify+guilds.join+guilds+applications.commands`
 - DMs only: `https://discord.com/oauth2/authorize?client_id=CLIENT_ID&response_type=code&redirect_uri=https%3A%2F%2FYOUR-SITE%2Foauth%2Fcallback&integration_type=1&scope=identify+guilds+applications.commands`
-- Dashboard sign-in with Discord: `https://discord.com/oauth2/authorize?client_id=CLIENT_ID&response_type=code&redirect_uri=https%3A%2F%2FYOUR-SITE%2Foauth%2Fcallback&scope=identify+guilds+guilds.members.read`
+- Dashboard sign-in with Discord (its own callback): `https://discord.com/oauth2/authorize?client_id=CLIENT_ID&response_type=code&redirect_uri=https%3A%2F%2FYOUR-SITE%2Flogin%2Fcallback&scope=identify+guilds+guilds.members.read`
 
 The dashboard Discord sign-in only works for a Discord account that was linked to a login first: sign in with the password, open Messages > Edit profile (via "Signed in as") and press **Link Discord account**. The login page also has a "Log in with Discord" button. While linked, the Servers tab lists servers where that Discord account has Manage Server or Administrator and the bot is not a member, each with an Add bot button. The account's `guilds` token is stored encrypted for this and is revoked when you unlink. The bot's default status is no activity with the message `YOUR-SITE`.
 
@@ -106,7 +107,7 @@ The dashboard Discord sign-in only works for a Discord account that was linked t
 | Route | Purpose |
 |---|---|
 | `/` , `/info` | Public home and info pages |
-| `/auth` | Authorization page: server joins, DMs, or both, each with an agreement and captcha |
+| `/auth` | Authorization page: server joins, DMs, or both, each with an agreement (no captcha) |
 | `/optout` | Self-service opt-out (Discord sign-in, then choose server / DM / everything) |
 | `/terms-of-service`, `/privacy-policy` | Legal pages (`/tos` redirects) |
 | `/login`, `/dashboard` | Owner dashboard: Bot Control, Users, Servers, DM Users, Logs |
@@ -127,7 +128,7 @@ The dashboard Discord sign-in only works for a Discord account that was linked t
 
 - Authorizations never expire unless an owner sets an expiry in the dashboard Database tab.
 - DMs only arrive if the user's Discord privacy settings allow them.
-- The built-in captcha is basic. Cloudflare Turnstile or hCaptcha can be added later.
+- There is no captcha on the authorization agreement; attempts are rate limited per IP.
 - Dashboard sessions are stored in PostgreSQL and expire after 2 hours.
 
 

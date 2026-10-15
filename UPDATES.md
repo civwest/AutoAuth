@@ -150,3 +150,18 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 - **Servers tab:** new box *Servers the bot is not in*. With a linked Discord account it lists the servers where that account has Manage Server or Administrator and the bot is not a member, each with icon, name and an **Add bot** button (cached one minute; Refresh reloads). Without a linked account it shows blurred placeholder rows with greyed buttons and a **Link with Discord** button on top.
 - **Login page:** proper Discord-styled **Log in with Discord** button (blurple, Discord logo).
 - A linked login keeps its Discord `guilds` token encrypted (table `dashboard_discord` gains token columns) so the list works after a normal password sign-in; unlinking revokes it. If it expires you are asked to link again.
+
+## v1.4.7
+- Dashboard login: the username is no longer case sensitive.
+- Mobile dashboard: the sidebar is now a three-line menu button that slides the list out (tap outside or a link to close).
+
+## v1.4.8
+- **Profile:** banner image (upload, remove) and a crop step for both the picture and the banner (drag + zoom); file choosers are now buttons. The Discord link button is the real Discord-styled button.
+- **Mobile:** public pages checked at phone width; Users and Servers tables turn into cards on phones so the action buttons are reachable.
+- **Site text:** fuller description of what AutoAuth is on the home page, footer and meta description; the Authorization page no longer mentions a quick check (there is no captcha).
+- **Quick actions:** *Opt out all users* (server joins, DMs or everything). Owner-started opt-outs (single user or all) DM people who allowed DMs first, then deauthorize.
+- DMs from people who have not authorized are ignored; DM Users shows only authorized people, without mutual-server tags.
+- Fix: schema order for `owner_profiles` on a brand-new database.
+
+## v1.4.9
+- **Dashboard sign-in with Discord now has its own callback URL**, `/login/callback` (optional env `LOGIN_REDIRECT_URI`). It no longer goes through the authorization callback, so it signs you in instead of showing the connected screen. Add `https://YOUR-SITE/login/callback` under OAuth2 > Redirects in the Developer Portal. The Link Discord button and the login button use it; the old login link that used `/oauth/callback` no longer works.

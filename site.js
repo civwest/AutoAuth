@@ -69,9 +69,6 @@ dialog.dlg h2{margin:0 0 8px;font-size:22px}
 .btn.green{background:#16a34a}.btn.green:hover{background:#15803d}.btn.blue{background:#2563eb}.btn.blue:hover{background:#1d4ed8}.btn.gray{background:#e5e7eb;color:#111}.btn:disabled{opacity:.5;cursor:not-allowed}
 .agree-list{margin:10px 0 14px;padding-left:20px}.agree-list li{margin:6px 0}
 .chk{display:flex;gap:10px;align-items:flex-start;margin:14px 0;font-size:14px}.chk input{margin-top:4px;width:18px;height:18px}
-.capbox{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:8px 0}
-.capbox svg{border-radius:8px;border:1px solid #e5e7eb;max-width:100%;height:auto}
-.capbox input{font:inherit;padding:10px 12px;border:1px solid #d4d4d8;border-radius:10px;width:150px;text-transform:uppercase;letter-spacing:2px}
 .linkbtn{background:none;border:0;color:#2563eb;cursor:pointer;font:inherit;text-decoration:underline;padding:0}
 footer{background:#000;color:#fff;padding:64px 28px 48px;min-height:260px;display:grid;grid-template-columns:1fr 1fr auto;gap:48px;align-items:start}
 .fcol h3{margin:0 0 14px;font-size:20px;font-weight:700;color:#fff}.fcol p,.fcol li{color:#d1d5db;font-size:15px;line-height:1.7;margin:0 0 10px}.fcol ul{margin:0;padding:0;list-style:none}.fcol code{background:#1f2937;color:#fff;padding:2px 6px;border-radius:5px;font-size:.92em}
@@ -83,7 +80,12 @@ footer{background:#000;color:#fff;padding:64px 28px 48px;min-height:260px;displa
 .legal a{display:block;color:#9ca3af;text-decoration:underline;font-size:14px;line-height:1.9}
 .legal a:hover{color:#d1d5db}
 @media(max-width:860px){footer{grid-template-columns:1fr;gap:36px}.foot{text-align:left}.icons{justify-content:flex-start}.authgrid{grid-template-columns:1fr}}
-@media(max-width:600px){.nav{padding:0 10px}.nav a.tab{padding:8px 9px;font-size:14px}footer{padding:48px 20px 36px}}
+@media(max-width:600px){
+body{font-size:15.5px}.nav{padding:0 8px;gap:2px}.nav .grp{gap:2px}.nav a.tab{padding:8px 8px;font-size:14px}.nav a.tab.login{padding:8px 12px}.nav .logo{width:30px;height:30px;margin-left:4px}
+.spacer{height:min(var(--gap,72vh),46vh)}.panel{padding:36px 18px 56px;border-radius:18px 18px 0 0}h2{font-size:20px;margin-top:28px}.lead{font-size:17px}
+code{word-break:break-word}.cta{display:block;text-align:center}.stats{grid-template-columns:repeat(3,1fr);gap:8px}.stat{padding:12px}.stat b{font-size:22px}
+table,tbody,tr,td{display:block;width:100%}tr:first-child:has(th){display:none}tr{border:1px solid #e5e5e5;border-radius:12px;padding:6px 4px;margin:10px 0}td{border:0;padding:6px 10px}td[data-l]::before{content:attr(data-l);display:block;font-size:12px;font-weight:700;color:#777;text-transform:uppercase;letter-spacing:.4px}
+dialog.dlg{padding:20px 18px}.btns .btn{flex:1}footer{padding:44px 18px 32px}}
 `;
 
 // Shared client script: scroll lock while any popup is open, and the "leaving the site" popup.
@@ -102,7 +104,7 @@ function layout({ title, active, gap = "72vh", body }) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title}</title>
-<meta name="description" content="AutoAuth is a Discord bot that adds authorized members to your server.">
+<meta name="description" content="AutoAuth is a Discord authorization bot. Members approve it once through Discord, and with their permission it can add them to servers that run the bot and let the owners send direct messages. Everything can be withdrawn at any time.">
 ${/^[\w-]{20,100}$/.test(process.env.GOOGLE_SITE_VERIFICATION || "") ? `<meta name="google-site-verification" content="${process.env.GOOGLE_SITE_VERIFICATION}">` : ""}
 <link rel="icon" type="image/webp" href="/assets/icon.webp">
 <link rel="apple-touch-icon" href="/assets/icon.webp">
@@ -120,8 +122,8 @@ ${/^[\w-]{20,100}$/.test(process.env.GOOGLE_SITE_VERIFICATION || "") ? `<meta na
 <div class="btns"><button type="button" class="btn green" onclick="goExternal()">Yes, do it!</button><button type="button" class="btn blue" onclick="closeDlg('leave')">No, I want to stay.</button></div></dialog>
 <footer>
 <div class="fcol"><h3>About AutoAuth</h3>
-<p>AutoAuth is a Discord bot that lets members link their account once, so server admins can add them to a server without sending invites, and so the owners can send them direct messages if they choose to allow it.</p>
-<p>Your account is saved with encrypted tokens, and you can opt out any time on the <a href="/optout">opt-out page</a> or with <code>/optout</code> in Discord.</p>
+<p>AutoAuth is a Discord authorization bot and website. Members approve it once through Discord's OAuth2 sign-in, choosing server joins, direct messages or both. With that approval, server administrators and the owners can add them to servers that run the bot, and the owners can message them through the bot.</p>
+<p>We store your Discord ID, username and encrypted tokens for only what you approved. Nothing happens without your approval, and you can opt out any time on the <a href="/optout">opt-out page</a> or with <code>/optout</code> in Discord. <a href="/info" style="text-decoration:underline">Read the full details</a>.</p>
 <p style="font-size:13px;color:#9ca3af">AutoAuth is an independent project run by ${OPERATOR}. It is not affiliated with, endorsed by, or sponsored by Discord Inc.</p></div>
 <div class="fcol"><h3>What it can do</h3>
 <ul>
@@ -146,12 +148,16 @@ ${LINKS.discord ? `<a href="${LINKS.discord}" target="_blank" rel="noopener" tit
 const homeBody = (online, stats, paused) => `
 <h1><span class="dot${online ? "" : " off"}"></span>${online ? "AutoAuth is online" : paused ? "The Discord connection was temporarily severed by the owners" : "AutoAuth is starting up"}</h1>
 <p class="lead">${online ? "The bot is connected to Discord and ready to go." : "The bot is connecting to Discord. Refresh in a moment."}</p>
+<h2>What AutoAuth is</h2>
+<p>AutoAuth is a Discord bot and website that works on explicit, per-person consent. You sign in with Discord's own OAuth2 screen, which lists the exact permissions requested, and Discord hands this site a token for only those permissions. AutoAuth stores your Discord user ID, username and the encrypted tokens, and nothing happens until you approve.</p>
+<p>You decide which of two permissions to give. <b>Server joins</b> lets server administrators and the owners add you to a server that runs the bot, with the <code>/addusers</code> and <code>/adduser</code> commands or the owners' dashboard, so nobody has to send you an invite link. <b>Direct messages</b> installs the bot to your Discord account and lets the owners message you through the bot, and lets you reply to it. You can give either or both.</p>
+<p>AutoAuth does not read your messages, friends or email and never sees your Discord password. It is not a login for other websites and it does not post on your behalf. You can switch off server joins, direct messages, or everything at any time on the <a href="/optout">opt-out page</a> or with <code>/optout</code>; opting out of everything revokes the token with Discord and deletes your record.</p>
 ${stats ? `<div class="stats"><div class="stat"><b>${Number(stats.servers) || 0}</b><span>Servers</span></div><div class="stat"><b>${Number(stats.members) || 0}</b><span>Linked members</span></div><div class="stat"><b>${online ? "Online" : "Offline"}</b><span>Bot status</span></div></div>` : ""}
 <p><a class="cta" href="/auth">Authorize your account</a></p>
 <h2>How it works</h2>
 <ol>
 <li>Open the <a href="/auth">Authorization</a> page and choose what you allow: server joins, direct messages, or both.</li>
-<li>Read and agree to the details, complete the quick check, and approve on Discord.</li>
+<li>Read and agree to the Terms of Service and Privacy Policy, then approve on Discord.</li>
 <li>A server admin can then add you with <code>/addusers</code> or <code>/adduser</code>, and the owners can message you if you allowed DMs.</li>
 <li>Change your mind any time on the <a href="/optout">opt-out page</a> or with <code>/optout</code>.</li>
 </ol>
@@ -159,26 +165,43 @@ ${stats ? `<div class="stats"><div class="stat"><b>${Number(stats.servers) || 0}
 
 const infoBody = `
 <h1>About AutoAuth</h1>
-<p class="lead">AutoAuth is a Discord bot that lets members link their account once, so server admins can add them to new servers without sending invites. Members can also allow direct messages from the owners.</p>
+<p class="lead">AutoAuth is a Discord authorization bot. A member approves it once through Discord's own OAuth2 sign-in, and AutoAuth then keeps the tokens Discord issues so it can act on only what that member approved: being added to servers that run the bot, and, if allowed, receiving direct messages from the bot's owners.</p>
+<h2>How it works in detail</h2>
+<p>When you press an option on the <a href="/auth">Authorization</a> page you are sent to discord.com, where Discord shows exactly which permissions are requested. After you approve, Discord returns a one-time code to this site, which exchanges it for an access token and a refresh token. AutoAuth stores your Discord user ID, your username and those two tokens, encrypted at rest (AES-256-GCM), together with which permissions you allowed and when. Your Discord password never reaches this site.</p>
+<p>A server administrator who runs the bot in their server can then use <code>/addusers</code> or <code>/adduser</code>. AutoAuth uses each member's stored token to ask Discord's API to add that member to the server (Discord's &ldquo;add guild member&rdquo; request, which needs the <code>guilds.join</code> permission). Tokens are refreshed automatically when they near expiry. If Discord reports that a token was revoked, the authorization is marked inactive.</p>
+<h2>What each choice means</h2>
+<table>
+<tr><th>Choice</th><th>Discord permissions</th><th>What it lets AutoAuth do</th></tr>
+<tr><td data-l="Choice">Server joins</td><td data-l="Discord permissions"><code>identify</code>, <code>guilds.join</code>, <code>guilds</code></td><td data-l="What it lets AutoAuth do">Add you to servers where the bot is installed when an administrator or the owners run the add commands, and let the owners remove you from servers they added you to.</td></tr>
+<tr><td data-l="Choice">Direct messages</td><td data-l="Discord permissions"><code>identify</code>, <code>guilds</code>, <code>applications.commands</code></td><td data-l="What it lets AutoAuth do">Installs the bot to your Discord account so its commands work anywhere, and lets the owners send you direct messages (with attachments) through the bot. Replies you send to the bot are shown to the owners.</td></tr>
+<tr><td data-l="Choice">Both</td><td data-l="Discord permissions">All of the above</td><td data-l="What it lets AutoAuth do">Everything in both rows.</td></tr>
+</table>
+<p>The <code>guilds</code> permission lets Discord share which servers you are in during sign-in; AutoAuth does not store that list. AutoAuth never reads your messages, your friends list or your email address.</p>
+<h2>What the owners and administrators can and cannot do</h2>
+<ul>
+<li>They can add you to servers, remove you from servers the bot can manage, send you direct messages if you allowed them, set an expiry on your authorization, and opt you out.</li>
+<li>They cannot see your Discord password or read your other messages. Tokens are never shown in the dashboard.</li>
+<li>Only people who have authorized AutoAuth appear in the owners' dashboard. Direct messages from anyone else are ignored.</li>
+</ul>
 <h2>Commands</h2>
 <table>
 <tr><th>Command</th><th>Who</th><th>What it does</th></tr>
-<tr><td><code>/auth</code></td><td>Anyone</td><td>Sends you a link to the <a href="/auth">Authorization page</a>, where you choose server joins, DMs or both.</td></tr>
-<tr><td><code>/optout</code></td><td>Anyone authorized</td><td>Opt out of server joins, DMs, or everything. Opting out of everything revokes your authorization and deletes your saved data and related log entries.</td></tr>
-<tr><td><code>/addusers</code></td><td>Server administrators</td><td>Adds every member who allowed server joins and is not already in the server.</td></tr>
-<tr><td><code>/adduser user_id</code></td><td>Server administrators</td><td>Adds one member who allowed server joins, by Discord user ID.</td></tr>
+<tr><td data-l="Command"><code>/auth</code></td><td data-l="Who">Anyone</td><td data-l="What it does">Sends you a link to the <a href="/auth">Authorization page</a>, where you choose server joins, DMs or both.</td></tr>
+<tr><td data-l="Command"><code>/optout</code></td><td data-l="Who">Anyone authorized</td><td data-l="What it does">Opt out of server joins, DMs, or everything. Opting out of everything revokes your authorization and deletes your saved data and related log entries.</td></tr>
+<tr><td data-l="Command"><code>/addusers</code></td><td data-l="Who">Server administrators</td><td data-l="What it does">Adds every member who allowed server joins and is not already in the server.</td></tr>
+<tr><td data-l="Command"><code>/adduser user_id</code></td><td data-l="Who">Server administrators</td><td data-l="What it does">Adds one member who allowed server joins, by Discord user ID.</td></tr>
 </table>
 <h2>Frequently asked questions</h2>
 <details><summary>What am I allowing when I authorize?</summary><p>You choose. <b>Server joins</b> lets admins add you to servers with AutoAuth. <b>Direct messages</b> lets the owners DM you through the bot. <b>Both</b> allows each. Details are shown before you continue.</p></details>
-<details><summary>Do you see my password, email or messages?</summary><p>No. Sign-in happens on discord.com. We only receive your username, your ID, and encrypted tokens for the permissions you approve.</p></details>
+<details><summary>Do you see my password, email or messages?</summary><p>No. Sign-in happens on discord.com. We receive your username, your ID, and tokens for the permissions you approve (stored encrypted). Discord also tells us which servers you are in during sign-in, but we do not keep that list.</p></details>
 <details><summary>How do I stop?</summary><p>Use the <a href="/optout">opt-out page</a>, or run <code>/optout</code> in Discord and pick servers, DMs or everything. You can also remove AutoAuth under User Settings → Authorized Apps.</p></details>
 <details><summary>Does my authorization expire?</summary><p>By default it stays active until you opt out. The owners can set an expiry for an authorization, after which it can no longer be used.</p></details>
 <details><summary>Can I be removed from a server?</summary><p>Yes. The owners can remove members they added, using the bot, and server administrators have their own tools.</p></details>
-<details><summary>Why did a DM not arrive?</summary><p>Discord only lets a bot message you if your privacy settings allow it. Check your DM settings for the server you share with the bot.</p></details>
+<details><summary>Why did a DM not arrive?</summary><p>Discord can refuse a bot's message, for example if you have blocked the bot or Discord limits it. If you allowed direct messages and still receive nothing, check your Discord privacy settings.</p></details>
 <h2>Documentation</h2>
 <p>Setup instructions and source code are on ${ext(LINKS.docs, "GitHub")}.</p>`;
 
-const UPDATED = "October 12, 2026";
+const UPDATED = "October 14, 2026";
 
 const privacyBody = `
 <h1>Privacy Policy</h1>
@@ -192,13 +215,12 @@ const privacyBody = `
 <li>An OAuth2 access token and refresh token for your account. The scopes depend on your choice: <code>identify</code>, <code>guilds.join</code> and <code>guilds</code> for server joins, and <code>applications.commands</code>, <code>identify</code> and <code>guilds</code> for direct messages (this installs AutoAuth to your Discord account). Both tokens are stored encrypted (AES-256-GCM).</li>
 <li>Which permissions you allowed (server joins, direct messages, or both), when you authorized, and any expiry the owners set on your authorization.</li>
 </ul>
-<p>We do not receive your email address, password, your messages, friends list, or the list of servers you are in.</p>
-<p><b>Check before you continue:</b> the Authorization page shows a captcha. It uses a short-lived signed token and is handled entirely by this site, with no third-party captcha service. Your IP address may be held in server memory for a few minutes for rate limiting and is not stored in the database.</p>
+<p>We do not receive your email address, password, your messages or your friends list. The <code>guilds</code> scope lets Discord share which servers you are in during authorization; AutoAuth does not store that list.</p>
+<p><b>Rate limiting:</b> your IP address may be held in server memory for a few minutes to limit repeated attempts. It is not stored in the database.</p>
 <p><b>Logs:</b> we keep an audit log of events such as commands used, authorizations and opt-outs, adds and removals from servers, and direct messages sent. Entries can include the relevant Discord user IDs, server IDs and names, and outcomes. For direct messages the audit log records the recipient, the message length, and the number of attachments, but not the message text or the files. When an owner signs in to the private dashboard, we log the sign-in and IP address and set a session cookie used only for that dashboard. Visitors to the public pages receive no cookies from us.</p>
 
 <h2>2. How we use it</h2>
 <ul>
-<li>The <code>guilds</code> scope lets Discord confirm the servers you are in; AutoAuth does not store your server list.</li>
 <li>To add you to a Discord server when a server administrator or the owners run <code>/addusers</code>, <code>/adduser</code> or the equivalent dashboard action (this is the purpose of the <code>guilds.join</code> scope).</li>
 <li>To let the owners send you direct messages, including attachments, if you allowed DMs.</li>
 <li>To remove you from a server when the owners choose to do so.</li>
@@ -212,7 +234,7 @@ const privacyBody = `
 <h2>4. Where it is stored</h2>
 <p>Data is stored in a PostgreSQL database and the bot runs on Render. Discord processes the authorization, and any message we send, under its own <a href="https://discord.com/privacy" target="_blank" rel="noopener">Privacy Policy</a>.</p>
 
-<p><b>Direct messages with the bot:</b> if you message the bot in a Discord DM, or the owners message you, the conversation is stored so the owners can read and reply to it in the dashboard. We keep your Discord username, ID and avatar link, the message text, and the names and links of any attachments. Each message is tagged as a mutual server DM (you share a server with the bot), an authorized DM (you allowed DMs on this website) or another DM. These messages are deleted automatically after the retention period (30 days by default), when an owner deletes the conversation, or when you opt out of everything.</p>
+<p><b>Direct messages with the bot:</b> if you have authorized AutoAuth and you message the bot in a Discord DM, or the owners message you, the conversation is stored so the owners can read and reply to it in the dashboard. We keep your Discord username, ID and avatar link, the message text, and the names and links of any attachments. Messages from people who have not authorized AutoAuth are not stored or shown. These messages are deleted automatically after the retention period (30 days by default), when an owner deletes the conversation, or when you opt out of everything.</p>
 <h2>5. Retention and expiry</h2>
 <p>By default an authorization stays active until you opt out. The owners can set an expiry date on an authorization; once it passes, the authorization is no longer used for adds, and it can be extended or deleted. Audit log entries are kept for security and troubleshooting, and those that contain your user ID are deleted when you opt out of everything.</p>
 
