@@ -189,7 +189,7 @@ const privacyBody = `
 <p>When you complete the <a href="/auth">Authorization</a> flow and approve the Discord screen, we receive and store:</p>
 <ul>
 <li>Your Discord user ID and username (or display name).</li>
-<li>An OAuth2 access token and refresh token for your account. The scopes depend on your choice: <code>identify</code> and <code>guilds.join</code> for server joins, and <code>applications.commands</code> and <code>identify</code> for direct messages (this installs AutoAuth to your Discord account). Both tokens are stored encrypted (AES-256-GCM).</li>
+<li>An OAuth2 access token and refresh token for your account. The scopes depend on your choice: <code>identify</code>, <code>guilds.join</code> and <code>guilds</code> for server joins, and <code>applications.commands</code>, <code>identify</code> and <code>guilds</code> for direct messages (this installs AutoAuth to your Discord account). Both tokens are stored encrypted (AES-256-GCM).</li>
 <li>Which permissions you allowed (server joins, direct messages, or both), when you authorized, and any expiry the owners set on your authorization.</li>
 </ul>
 <p>We do not receive your email address, password, your messages, friends list, or the list of servers you are in.</p>
@@ -198,6 +198,7 @@ const privacyBody = `
 
 <h2>2. How we use it</h2>
 <ul>
+<li>The <code>guilds</code> scope lets Discord confirm the servers you are in; AutoAuth does not store your server list.</li>
 <li>To add you to a Discord server when a server administrator or the owners run <code>/addusers</code>, <code>/adduser</code> or the equivalent dashboard action (this is the purpose of the <code>guilds.join</code> scope).</li>
 <li>To let the owners send you direct messages, including attachments, if you allowed DMs.</li>
 <li>To remove you from a server when the owners choose to do so.</li>

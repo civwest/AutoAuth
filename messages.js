@@ -62,6 +62,7 @@ ${p.discord ? `<h3>Discord</h3><p>${discordHref(p.discord) ? `<a href="${esc(dis
 
   app.get("/users/profile/edit", logged, owner, async (req, res) => {
     const p = await getProfile(req.me);
+    const dl = (await pool.query("SELECT discord_id,username FROM dashboard_discord WHERE owner_key=$1", [req.me])).rows[0];
     let zones = []; try { zones = Intl.supportedValuesOf("timeZone"); } catch {}
     const content = `<div class="top"><div><h1>Edit profile</h1><p class="muted">Only the owners can see this profile.</p></div><a class="btn secondary" href="/users/profile">Cancel</a></div>
 <div class="card" style="max-width:640px"><div style="display:flex;gap:16px;align-items:center"><div id="av-prev">${avatar(p, "lg")}</div><div><label style="margin:0">Profile picture</label><input type="file" id="pf-file" accept="image/png,image/jpeg,image/webp,image/gif"><label style="display:flex;gap:8px;align-items:center;margin:8px 0 0"><input type="checkbox" id="pf-rm" style="width:auto;margin:0"> Remove picture</label></div></div>
@@ -74,6 +75,7 @@ ${p.discord ? `<h3>Discord</h3><p>${discordHref(p.discord) ? `<a href="${esc(dis
 <label>Links (one per line, up to 3, https only)</label><textarea id="pf-links" maxlength="400" style="min-height:70px">${esc(p.links)}</textarea>
 <label>Profile colour</label><input type="color" id="pf-accent" value="${esc(p.accent)}" style="width:80px;height:40px;padding:2px">
 <div style="margin-top:16px"><button type="button" class="green" id="pf-save">Save profile</button></div></div>
+<div class="card" style="max-width:640px;margin-top:16px"><h2>Sign in with Discord</h2>${dl ? `<p>Linked to Discord account <b>${esc(dl.username || dl.discord_id)}</b> (${esc(dl.discord_id)}). You can use "Sign in with Discord" on the login page.</p><form method="post" action="/users/profile/discord-unlink"><button class="danger">Unlink Discord</button></form>` : `<p class="muted">Link your Discord account to this login so you can sign in with Discord instead of a password. Nobody can sign in with Discord unless you link it here while signed in.</p><form method="post" action="/users/profile/discord-link"><button class="green">Link Discord account</button></form>`}</div>
 <script>${EDIT_JS}</script>`;
     render(req, res, "profile", content);
   });
@@ -161,6 +163,12 @@ $('au-copy').addEventListener('click',function(){var t=$('au-n1').textContent+'=
     if (pw.length < 12 || pw.length > 128) return res.status(400).json({ error: "The password must be 12 to 128 characters." });
     if (pw !== String(b.password2 || "")) return res.status(400).json({ error: "The two passwords do not match." });
     res.json({ username, hash: hashPw(pw), userVar: `DASHBOARD_ADMIN${slot}_USER`, hashVar: `DASHBOARD_ADMIN${slot}_PASSWORD_HASH`, permVar: `DASHBOARD_ADMIN${slot}_PERMISSIONS`, perms: perms.length === ADMIN_PERMS.length ? "all" : perms.join(",") || "none" });
+  });
+
+  app.post("/users/profile/discord-unlink", logged, owner, verifyOrigin, async (req, res) => {
+    await pool.query("DELETE FROM dashboard_discord WHERE owner_key=$1", [req.me]);
+    req.session.flash = "Discord account unlinked.";
+    res.redirect(303, "/users/profile/edit");
   });
 
   // ---------- conversations ----------

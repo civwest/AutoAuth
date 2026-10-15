@@ -10,15 +10,17 @@ const crypto = require("node:crypto");
 
 // scope strings and whether the user-install integration type is used
 const MODES = {
-  server: { code: "s", scope: ["guilds.join", "identify"], userInstall: false },
-  dm: { code: "d", scope: ["identify", "applications.commands"], userInstall: true },
+  server: { code: "s", scope: ["identify", "guilds.join", "guilds"], userInstall: false },
+  dm: { code: "d", scope: ["identify", "guilds", "applications.commands"], userInstall: true },
   optout: { code: "o", scope: ["identify"], userInstall: false },
-  all: { code: "a", scope: ["identify", "applications.commands", "guilds.join"], userInstall: true },
+  all: { code: "a", scope: ["identify", "guilds.join", "guilds", "applications.commands"], userInstall: true },
+  link: { code: "k", scope: ["identify", "guilds", "guilds.members.read"], userInstall: false }, // links a Discord account to a dashboard login
+  login: { code: "l", scope: ["identify", "guilds", "guilds.members.read"], userInstall: false }, // dashboard sign-in with a linked Discord account
 };
 const BY_CODE = Object.fromEntries(Object.entries(MODES).map(([k, v]) => [v.code, k]));
 
 module.exports = function mountAuth(app, ctx) {
-  const { site, pool, enc, log, equal, verifyOrigin, optOutUser } = ctx;
+  const { site, pool, enc, log, equal, verifyOrigin, optOutUser, dashDiscord } = ctx;
   const secret = process.env.SESSION_SECRET;
   const used = new Map(); // nonce -> expiry (single-use state + captcha tokens)
   const hits = new Map(); // rate limiting
@@ -173,6 +175,13 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
     } catch (e) { console.error(e); res.status(500).send(site.page("Opt out", "<h1>Something went wrong</h1><p>Please try again in a moment.</p>", "auth")); }
   });
 
+  // Starts linking a Discord account to the signed-in dashboard login (button on the profile edit page).
+  app.post("/users/profile/discord-link", verifyOrigin, (req, res) => {
+    if (!req.session || !req.session.owner) return res.redirect(303, "/login");
+    req.session.linkPending = Date.now() + 10 * 60 * 1000;
+    req.session.save(() => res.set("Cache-Control", "no-store").redirect(303, discordUrl("link")));
+  });
+
   // Old direct link now just leads to the page.
   app.get("/auth/start", (_, res) => res.redirect(302, "/auth"));
 
@@ -191,7 +200,8 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
       await log("oauth_denied", { error: String(error) });
       return res.status(400).send(site.page("Authorization cancelled", `<h1>Authorization cancelled</h1><p>You did not approve AutoAuth, so nothing was saved.</p>${retry}`, "auth"));
     }
-    if (!mode || typeof code !== "string" || !code) {
+    // A plain Discord authorize link (no state from this site) is fine: the mode is worked out from the scopes Discord granted.
+    if (typeof code !== "string" || !code) {
       await log("oauth_invalid_state", { has_code: !!code, has_state: typeof req.query.state === "string", has_cookie: !!cookieState, reason: why, keys: Object.keys(req.query).join(",").slice(0, 100) });
       return res.status(400).send(site.page("Start from the website", `<h1>Please start from the website</h1><p>For security, authorization has to be started from the <a href="/auth">Authorization page</a>, where you read the details and complete a quick check. This link is invalid, expired, or was already used.</p><p class="muted" style="font-size:12px">Reason: ${why.replace(/[<>&"']/g, "")}.</p>${retry}`, "auth"));
     }
@@ -201,6 +211,24 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
       if (!r.ok) { await log("oauth_exchange_failed", { status: r.status, error: t.error }); return res.status(502).send(site.page("Authorization failed", `<h1>Authorization failed</h1><p>Discord rejected the sign-in. Please try again.</p>${retry}`, "auth")); }
       const ur = await fetch("https://discord.com/api/v10/users/@me", { headers: { Authorization: `Bearer ${t.access_token}` } }), u = await ur.json();
       if (!ur.ok || !u.id) { await log("oauth_user_fetch_failed", { status: ur.status }); return res.status(502).send(site.page("Authorization failed", `<h1>Could not read your account</h1><p>Discord did not return your account details. Please try again.</p>${retry}`, "auth")); }
+      const grantedScopes = typeof t.scope === "string" ? t.scope.split(/[ +]/) : (mode ? MODES[mode].scope : []);
+      if (!mode) {
+        mode = grantedScopes.includes("guilds.join") && grantedScopes.includes("applications.commands") ? "all"
+          : grantedScopes.includes("guilds.join") ? "server"
+          : grantedScopes.includes("applications.commands") ? "dm"
+          : grantedScopes.includes("guilds.members.read") ? "login" : null;
+        if (!mode) {
+          fetch("https://discord.com/api/v10/oauth2/token/revoke", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: process.env.CLIENT_ID, client_secret: process.env.CLIENT_SECRET, token: t.access_token, token_type_hint: "access_token" }) }).catch(() => {});
+          return res.status(400).send(site.page("Nothing was enabled", `<h1>Nothing was enabled</h1><p>That link did not grant any AutoAuth permission. To opt out, use the <a href="/optout">opt-out page</a>.</p>${retry}`, "auth"));
+        }
+      }
+      if (mode === "login" || mode === "link") {
+        // Dashboard sign-in / account linking: only identity is used, so the token is revoked straight away.
+        fetch("https://discord.com/api/v10/oauth2/token/revoke", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: process.env.CLIENT_ID, client_secret: process.env.CLIENT_SECRET, token: t.access_token, token_type_hint: "access_token" }) }).catch(() => {});
+        const out = await dashDiscord(req, u, mode);
+        if (out.redirect) return res.redirect(303, out.redirect);
+        return res.status(out.status || 403).send(site.page("Dashboard sign-in", `<h1>${out.title || "Could not sign in"}</h1><p>${out.error}</p><p><a class="cta" href="/login">Go to the dashboard login</a></p>`, "auth"));
+      }
       if (mode === "optout") {
         // Identity only: revoke this temporary token straight away, nothing is stored.
         fetch("https://discord.com/api/v10/oauth2/token/revoke", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: process.env.CLIENT_ID, client_secret: process.env.CLIENT_SECRET, token: t.access_token, token_type_hint: "access_token" }) }).catch(() => {});
@@ -216,7 +244,7 @@ ${row.server_authorized ? '<button class="btn gray" name="type" value="server">O
 <p>Opting out of everything revokes the grant with Discord and deletes your saved record. You are not removed from any servers.</p>`, "auth"));
       }
       // What was actually granted decides the flags; fall back to what was requested if Discord omits the scope field.
-      const granted = typeof t.scope === "string" ? t.scope.split(/[ +]/) : MODES[mode].scope;
+      const granted = grantedScopes;
       const serverOk = mode !== "dm" && granted.includes("guilds.join");
       const dmOk = mode !== "server" && granted.includes("applications.commands");
       if (!serverOk && !dmOk) { await log("oauth_no_scopes", { mode }); return res.status(400).send(site.page("Nothing was enabled", `<h1>Nothing was enabled</h1><p>Discord did not grant the permissions needed. Please try again.</p>${retry}`, "auth")); }

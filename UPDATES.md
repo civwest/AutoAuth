@@ -140,3 +140,8 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 - **No premade logins.** No dashboard login is required and none gets default access. A login exists only if its `DASHBOARD_ADMINn_USER` and `_PASSWORD_HASH` are set, and `DASHBOARD_ADMINn_PERMISSIONS` decides what it may use (`all`, `none` or a list; if left out, Messages only). Set `all` on at least one login to use Add user.
 - README: every dashboard login variable is now listed explicitly with an example and the permission words.
 - Logins defined with the `DASHBOARD_OWNERn_*` variables are owners and have full permission by default; `DASHBOARD_ADMINn_*` logins only get what their `_PERMISSIONS` lists (Messages only if unset).
+
+## v1.4.5
+- **Default bot status:** no activity, status message `autoauth.cfd` (the host from `REDIRECT_URI`).
+- **Authorization links work from anywhere.** The Discord authorize links (server joins, server joins + DMs, DMs only) no longer need to start on the website: the callback works out the mode from the scopes Discord granted. The site's own buttons now request the same scopes (including `guilds`).
+- **Sign in to the dashboard with Discord** (`identify guilds guilds.members.read`): link your Discord account on Edit profile > *Link Discord account* (needs a password sign-in first), then use "Sign in with Discord" on the login page or the direct link. Unlinked accounts are refused. New table `dashboard_discord`; the token is revoked immediately.

@@ -91,6 +91,16 @@ Keep real passwords, tokens and hashes out of GitHub.
 - Invite the bot with the "Add bot to server" link in the dashboard sidebar.
 - Visit `/` (site), `/auth` (authorization), `/optout`, `/login` (dashboard).
 
+## Direct authorization links
+These Discord links work from anywhere (a message, a bio, another site). AutoAuth works out what was allowed from the permissions Discord returns, so nothing has to start on the website. Replace `CLIENT_ID` and `YOUR-SITE`; the redirect must be added in Developer Portal > OAuth2 > Redirects.
+
+- Server joins: `https://discord.com/oauth2/authorize?client_id=CLIENT_ID&response_type=code&redirect_uri=https%3A%2F%2FYOUR-SITE%2Foauth%2Fcallback&scope=identify+guilds.join+guilds`
+- Server joins and DMs: `https://discord.com/oauth2/authorize?client_id=CLIENT_ID&response_type=code&redirect_uri=https%3A%2F%2FYOUR-SITE%2Foauth%2Fcallback&integration_type=1&scope=identify+guilds.join+guilds+applications.commands`
+- DMs only: `https://discord.com/oauth2/authorize?client_id=CLIENT_ID&response_type=code&redirect_uri=https%3A%2F%2FYOUR-SITE%2Foauth%2Fcallback&integration_type=1&scope=identify+guilds+applications.commands`
+- Dashboard sign-in with Discord: `https://discord.com/oauth2/authorize?client_id=CLIENT_ID&response_type=code&redirect_uri=https%3A%2F%2FYOUR-SITE%2Foauth%2Fcallback&scope=identify+guilds+guilds.members.read`
+
+The dashboard Discord sign-in only works for a Discord account that was linked to a login first: sign in with the password, open Messages > Edit profile (via "Signed in as") and press **Link Discord account**. The login page also has a "Sign in with Discord" button. The bot's default status is no activity with the message `YOUR-SITE`.
+
 ## 5. Pages and routes
 
 | Route | Purpose |
