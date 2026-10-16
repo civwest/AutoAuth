@@ -15,7 +15,7 @@ const SETUP = {
   invite: (u) => [`Share <code>${u}</code>. It sends people to Discord's authorize page for your bot.`],
 };
 
-module.exports = function createAccounts({ pool, enc, dec, log, express, projects, site, esc }) {
+module.exports = function createAccounts({ pool, enc, dec, log, express, projects, site, esc, isOwnerName = () => false }) {
   const fp = (req) => crypto.createHash("sha256").update(String(req.get("user-agent") || "unknown")).digest("hex");
   const origin = () => { try { return new URL(process.env.REDIRECT_URI).origin; } catch { return ""; } };
   const hits = new Map();
@@ -25,20 +25,46 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
   const regen = (req) => new Promise((ok, no) => req.session.regenerate((e) => (e ? no(e) : ok())));
   const clip = (s, n) => String(s ?? "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "").trim().slice(0, n);
 
-  // ---------- sign-up / sign-in (Discord) ----------
   const DISCORD_ICON = require("./icons").discord;
-  const dbtn = (label) => `<button class="dbtn" style="display:inline-flex;align-items:center;gap:10px;background:#5865f2;color:#fff;border:0;border-radius:6px;padding:12px 20px;font-size:16px;font-weight:600;cursor:pointer"><svg viewBox="0 0 24 24" width="22" height="22" fill="#fff" aria-hidden="true"><path d="${DISCORD_ICON}"/></svg>${label}</button>`;
+  // One page layout shared by /login and /signup.
+  const AUTH_CSS = "body{font:16px system-ui;background:#0d1117;color:#e6edf3}.box{max-width:420px;margin:10vh auto;padding:28px;background:#161b22;border:1px solid #30363d;border-radius:14px}input,button,.alt{width:100%;padding:12px;margin:8px 0 14px;box-sizing:border-box;border-radius:8px;border:1px solid #30363d;font:inherit}input{background:#0d1117;color:white}button.go{background:#7289da;color:white;border:0;cursor:pointer}.alt{display:block;text-align:center;color:#e6edf3;text-decoration:none;margin:8px 0 0}.or{display:flex;align-items:center;gap:10px;color:#9da7b3;font-size:13px;margin:6px 0}.or span{flex:1;height:1px;background:#30363d}.dc{display:flex;align-items:center;justify-content:center;gap:10px;padding:12px;border-radius:6px;background:#5865F2;color:#fff;text-decoration:none;font-weight:600;border:0;cursor:pointer;width:100%;margin:0;font-size:16px}.err{color:#ff8a8a}.muted{color:#9da7b3;font-size:14px}";
+  const dcIcon = `<svg viewBox="0 0 24 24" width="22" height="22" fill="#fff" aria-hidden="true"><path d="${DISCORD_ICON}"/></svg>`;
+  const discordLink = (href, label) => `<a class="dc" href="${esc(href)}">${dcIcon}${label}</a>`;
+  const discordPost = (intent, label) => `<form method="post" action="/signup/discord" style="margin:0"><input type="hidden" name="intent" value="${intent}"><button class="dc">${dcIcon}${label}</button></form>`;
+  const authPage = ({ title, sub, error, top, form, foot }) => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><style>${AUTH_CSS}</style><div class="box"><h1>AutoAuth</h1><p>${esc(sub)}</p>${error ? `<p class="err">${esc(error)}</p>` : ""}${top}<div class="or"><span></span>or<span></span></div>${form}${foot}</div>`;
 
-  async function accountDiscord(req, u, t) {
-    const intent = req.session.acctIntent === "login" ? "login" : "signup";
+  const slugName = (s) => { let u = String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 20).replace(/-+$/, ""); if (u.length < 3) u = (u + "user").slice(0, 20); return u; };
+  async function freeUsername(base) {
+    for (let n = 0; n < 50; n++) {
+      const suffix = n === 0 ? "" : String(n + 1), u = base.slice(0, 20 - suffix.length).replace(/-+$/, "") + suffix;
+      if (!NAME.test(u) || RESERVED.has(u) || isOwnerName(u)) continue;
+      if (!(await pool.query("SELECT 1 FROM accounts WHERE username=$1", [u])).rows[0]) return u;
+    }
+    return "user" + crypto.randomBytes(4).toString("hex");
+  }
+  const hashPw = (pw) => { const salt = crypto.randomBytes(16); return `scrypt$${salt.toString("hex")}$${crypto.scryptSync(pw, salt, 32, { N: 16384, r: 8, p: 1 }).toString("hex")}`; };
+  const checkPw = (pw, h) => { try { const [alg, salt, exp] = String(h).split("$"); if (alg !== "scrypt") return false; const got = crypto.scryptSync(pw, Buffer.from(salt, "hex"), 32, { N: 16384, r: 8, p: 1 }); return crypto.timingSafeEqual(got, Buffer.from(exp, "hex")); } catch { return false; } };
+  async function createAccount({ username, name, discordId, avatar, passwordHash }) {
+    const r = await pool.query("INSERT INTO accounts(username,display_name,discord_id,discord_name,avatar,password_hash) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,username", [username, name, discordId || null, discordId ? name : null, avatar || null, passwordHash || null]);
+    await pool.query("INSERT INTO support_messages(account_id,from_admin,sender,body,read_admin) VALUES($1,true,'Support',$2,true)", [r.rows[0].id, "Welcome. Message us here if you need help with a project."]);
+    await log("account_created", { username });
+    return r.rows[0];
+  }
+
+  // Discord sign-up: the account takes its name from the Discord account.
+  async function accountDiscord(req, u) {
     const name = clip(u.global_name || u.username || u.id, 60);
     const avatar = u.avatar ? `https://cdn.discordapp.com/avatars/${u.id}/${u.avatar}.png?size=128` : "";
     const row = (await pool.query("SELECT id,username FROM accounts WHERE discord_id=$1", [u.id])).rows[0];
     if (row) return start(req, row);
-    if (intent === "login") return { status: 404, title: "No account found", error: "There is no account for this Discord user yet. Use Sign up first.", back: "/signup" };
-    req.session.acctPending = { id: u.id, name, avatar, until: Date.now() + 15 * 60 * 1000 };
-    await save(req);
-    return { redirect: "/signup/username" };
+    if (req.session.acctIntent === "login") return { status: 404, title: "No account found", error: "There is no account for this Discord user yet.", back: "/signup" };
+    const acct = await createAccount({ username: await freeUsername(slugName(u.username || u.global_name)), name, discordId: u.id, avatar });
+    return start(req, acct);
+  }
+  // Used by the login page's Discord button.
+  async function accountLogin(req, u) {
+    const row = (await pool.query("SELECT id,username FROM accounts WHERE discord_id=$1", [u.id])).rows[0];
+    return row ? start(req, row) : null;
   }
   async function start(req, row) {
     await regen(req);
@@ -48,38 +74,29 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
     await pool.query("UPDATE accounts SET last_login=NOW() WHERE id=$1", [row.id]).catch(() => {});
     return { redirect: "/dashboard/" + row.username };
   }
+  async function passwordLogin(username, pw) {
+    const r = (await pool.query("SELECT id,username,password_hash FROM accounts WHERE username=$1", [String(username).trim().toLowerCase()])).rows[0];
+    if (!r || !r.password_hash) { checkPw(pw, "scrypt$00$00"); return null; }
+    return checkPw(pw, r.password_hash) ? r : null;
+  }
 
   function mountPublic(app) {
-    const form = express.urlencoded({ extended: false, limit: "5kb" });
     app.get("/signup", (req, res) => {
       if (req.session && req.session.acct) return res.redirect(303, "/dashboard/" + req.session.acct.username);
-      res.set("Cache-Control", "no-store").send(site.page("Sign up", `<h1>Projects</h1>
-<p class="lead">Create an account to host the web endpoints a Discord bot needs: OAuth callbacks, interactions, webhooks and policy pages.</p>
-<p>Your projects hold sensitive data such as access tokens. It is encrypted, and AutoAuth's admins cannot read it or open your dashboard. We can only message you through Support.</p>
-<form method="post" action="/signup/discord" style="margin:18px 0"><input type="hidden" name="intent" value="signup">${dbtn("Sign up with Discord")}</form>
-<form method="post" action="/signup/discord"><input type="hidden" name="intent" value="login"><button class="cta" style="background:none;border:1px solid #3a4352;color:inherit;border-radius:6px;padding:10px 18px;cursor:pointer">Log in with Discord</button></form>`, ""));
+      const e = { taken: "That username is taken.", name: "Use 3 to 20 letters, numbers or dashes.", pw: "Use a password of at least 8 characters.", rate: "Too many attempts. Try again later." }[req.query.e] || "";
+      res.set("Cache-Control", "no-store").send(authPage({ title: "AutoAuth Sign up", sub: "Create an account", error: e, top: discordPost("signup", "Sign up with Discord"),
+        form: `<form method="post" action="/signup"><label>Username</label><input name="username" maxlength="20" autocomplete="username" required><label>Password</label><input type="password" name="password" minlength="8" autocomplete="new-password" required><button class="go">Create account</button></form>`,
+        foot: `<p class="muted">Already have an account? <a href="/login" style="color:#9db4ff">Log in</a></p><p class="muted">Project data is encrypted. AutoAuth's admins cannot read it or open your dashboard.</p>` }));
     });
-    app.get("/signup/username", (req, res) => {
-      const p = req.session && req.session.acctPending;
-      if (!p || p.until < Date.now()) return res.redirect(303, "/signup");
-      res.set("Cache-Control", "no-store").send(site.page("Choose a username", `<h1>Choose a username</h1><p>Signed in with Discord as <b>${esc(p.name)}</b>. Your projects will live at <code>${esc(origin())}/projects/<b>username</b>/project-name/...</code></p>
-${req.query.e ? `<div class="banner">${esc(req.query.e)}</div>` : ""}<form method="post" action="/signup/username"><label>Username</label><input name="username" maxlength="20" autocomplete="off" required pattern="[a-z0-9-]{3,20}" style="display:block;margin:8px 0 14px;padding:10px;width:260px"><button class="cta" style="cursor:pointer">Create account</button></form>`, ""));
-    });
-    app.post("/signup/username", form, async (req, res) => {
-      const p = req.session && req.session.acctPending;
-      if (!p || p.until < Date.now()) return res.redirect(303, "/signup");
-      const u = clip(req.body.username, 20).toLowerCase();
-      const bad = (m) => res.redirect(303, "/signup/username?e=" + encodeURIComponent(m));
-      if (!NAME.test(u)) return bad("Use 3 to 20 letters, numbers or dashes.");
-      if (RESERVED.has(u)) return bad("That username is not available.");
+    app.post("/signup", async (req, res) => {
+      if (limited("sp:" + req.ip, 10, 600000)) return res.redirect(303, "/signup?e=rate");
+      const u = clip((req.body || {}).username, 20).toLowerCase(), pw = String((req.body || {}).password || "");
+      if (!NAME.test(u) || RESERVED.has(u) || isOwnerName(u)) return res.redirect(303, "/signup?e=name");
+      if (pw.length < 8 || pw.length > 200) return res.redirect(303, "/signup?e=pw");
       try {
-        const r = await pool.query("INSERT INTO accounts(username,display_name,discord_id,discord_name,avatar) VALUES($1,$2,$3,$4,$5) RETURNING id,username", [u, p.name, p.id, p.name, p.avatar]);
-        await pool.query("INSERT INTO support_messages(account_id,from_admin,sender,body,read_admin) VALUES($1,true,'Support',$2,true)", [r.rows[0].id, "Welcome. Message us here if you need help with a project."]);
-        await log("account_created", { username: u });
-        delete req.session.acctPending;
-        const out = await start(req, r.rows[0]);
-        res.redirect(303, out.redirect);
-      } catch (e) { if (e.code === "23505") return bad("That username or Discord account is already taken."); console.error(e); res.status(500).send("Something went wrong."); }
+        const acct = await createAccount({ username: u, name: u, passwordHash: hashPw(pw) });
+        const out = await start(req, acct); res.redirect(303, out.redirect);
+      } catch (e) { if (e.code === "23505") return res.redirect(303, "/signup?e=taken"); console.error(e); res.status(500).send("Something went wrong."); }
     });
     app.post("/account/logout", (req, res) => { req.session.destroy(() => res.redirect(303, "/")); });
   }
@@ -258,5 +275,5 @@ poll();setInterval(poll,4000);})();`;
   // Signed-in accounts that open /dashboard land on their own dashboard.
   const landing = (req) => (req.session && req.session.acct && !req.session.owner ? "/dashboard/" + req.session.acct.username : null);
 
-  return { accountDiscord, mountPublic, mountDash, mountAdmin, landing };
+  return { accountDiscord, accountLogin, passwordLogin, start, authPage, discordLink, mountPublic, mountDash, mountAdmin, landing };
 };

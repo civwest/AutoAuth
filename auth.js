@@ -167,7 +167,15 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
       if (!r.ok) { await log("dashboard_discord_exchange_failed", { status: r.status, error: t.error }); return fail("Discord rejected the sign-in. Make sure the login callback URL is added in the Developer Portal, then try again.", 502); }
       const ur = await fetch("https://discord.com/api/v10/users/@me", { headers: { Authorization: `Bearer ${t.access_token}` } }), u = await ur.json();
       if (!ur.ok || !u.id) return fail("Discord did not return your account details. Please try again.", 502);
-      const out = mode === "account" ? await accountDiscord(req, u, t) : await dashDiscord(req, u, mode, t);
+      let out;
+      if (mode === "account") out = await accountDiscord(req, u, t);
+      else {
+        out = await dashDiscord(req, u, mode, t);
+        if (mode === "login" && !out.redirect && out.status === 403) {
+          const acct = await ctx.accountLogin(req, u);
+          out = acct || { status: 404, title: "No account found", error: "There is no account for this Discord user yet.", back: "/signup" };
+        }
+      }
       if (out.redirect) return res.redirect(303, out.redirect);
       return res.status(out.status || 403).send(site.page("Dashboard sign-in", `<h1>${out.title || "Could not sign in"}</h1><p>${out.error}</p><p><a class="cta" href="${out.back || "/login"}">${out.back ? "Back" : "Go to the dashboard login"}</a></p>`, "auth"));
     } catch (e) { console.error(e); await log("dashboard_discord_error", { error: e.message }); return fail("Something went wrong. Please try again.", 500); }

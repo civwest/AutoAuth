@@ -88,6 +88,7 @@ async function schema() {
  CREATE TABLE IF NOT EXISTS project_logs(id BIGSERIAL PRIMARY KEY, slug TEXT NOT NULL, event_type TEXT NOT NULL, detail JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  CREATE INDEX IF NOT EXISTS project_logs_slug ON project_logs(slug,id);
  CREATE TABLE IF NOT EXISTS dashboard_discord(owner_key TEXT PRIMARY KEY, discord_id TEXT UNIQUE NOT NULL, username TEXT, linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS password_hash TEXT;
  ALTER TABLE side_projects ADD COLUMN IF NOT EXISTS owner_account BIGINT REFERENCES accounts(id) ON DELETE CASCADE;
  ALTER TABLE side_projects ADD COLUMN IF NOT EXISTS locked BOOLEAN NOT NULL DEFAULT FALSE;
  ALTER TABLE dashboard_discord ADD COLUMN IF NOT EXISTS access_token_enc TEXT;
@@ -305,22 +306,25 @@ async function dashDiscord(req,u,intent,t){
  return {redirect:"/dashboard"};
 }
 const projects=require("./projects")({pool,enc,dec,log,express}); projects.mountPublic({app,site}); // /projects/<name>/... and /projects/<user>/<name>/...
-const accounts=require("./accounts")({pool,enc,dec,log,express,projects,site,esc}); accounts.mountPublic(app);
-require("./auth")(app,{site,pool,enc,log,equal,verifyOrigin,optOutUser,dashDiscord,accountDiscord:accounts.accountDiscord,loginRedirect:LOGIN_REDIRECT}); // /auth, /auth/start, /oauth/callback
+const accounts=require("./accounts")({pool,enc,dec,log,express,projects,site,esc,isOwnerName:u=>owners.some(o=>o.user.toLowerCase()===String(u).toLowerCase())}); accounts.mountPublic(app);
+require("./auth")(app,{site,pool,enc,log,equal,verifyOrigin,optOutUser,dashDiscord,accountDiscord:accounts.accountDiscord,accountLogin:accounts.accountLogin,loginRedirect:LOGIN_REDIRECT}); // /auth, /auth/start, /oauth/callback
 
 const DISCORD_PATH=require("./icons").discord;
 function discordLoginUrl(){ const u=new URL("https://discord.com/oauth2/authorize"); u.searchParams.set("client_id",process.env.CLIENT_ID); u.searchParams.set("response_type","code"); u.searchParams.set("redirect_uri",LOGIN_REDIRECT); u.searchParams.set("scope","identify guilds guilds.members.read"); return u.toString(); }
 app.get("/dashboard/login",(req,res)=>res.redirect(302,"/login"));
 app.get("/login",(req,res)=>{
  if(req.session.owner)return res.redirect(safeNext(req.query.next)||"/dashboard");
- res.send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AutoAuth Login</title><style>body{font:16px system-ui;background:#0d1117;color:#e6edf3}.box{max-width:420px;margin:12vh auto;padding:28px;background:#161b22;border:1px solid #30363d;border-radius:14px}input,button{width:100%;padding:12px;margin:8px 0 14px;box-sizing:border-box;border-radius:8px;border:1px solid #30363d}input{background:#0d1117;color:white}button{background:#7289da;color:white;border:0;cursor:pointer}</style><div class="box"><h1>AutoAuth</h1><p>Owner dashboard login</p>${req.query.error?"<p>Login failed. Check username and password.</p>":""}<form method="post"><input type="hidden" name="next" value="${esc(safeNext(req.query.next))}"><label>Username</label><input name="username" autocomplete="username" required><label>Password</label><input type="password" name="password" autocomplete="current-password" required><button>Sign in</button></form><div style="display:flex;align-items:center;gap:10px;color:#9da7b3;font-size:13px;margin:6px 0"><span style="flex:1;height:1px;background:#30363d"></span>or<span style="flex:1;height:1px;background:#30363d"></span></div><a href="${esc(discordLoginUrl())}" style="display:flex;align-items:center;justify-content:center;gap:10px;padding:12px;border-radius:6px;background:#5865F2;color:#fff;text-decoration:none;font-weight:600"><svg viewBox="0 0 24 24" width="22" height="22" fill="#fff" aria-hidden="true"><path d="${DISCORD_PATH}"/></svg>Log in with Discord</a><p style="font-size:13px;color:#9da7b3">Works once your Discord account is linked to your login (Edit profile > Link Discord account).</p></div>`);
+ if(req.session.acct)return res.redirect(303,"/dashboard/"+req.session.acct.username);
+ res.send(accounts.authPage({title:"AutoAuth Login",sub:"Log in",error:req.query.error?"Login failed. Check username and password.":"",top:accounts.discordLink(discordLoginUrl(),"Log in with Discord"),
+  form:`<form method="post"><input type="hidden" name="next" value="${esc(safeNext(req.query.next))}"><label>Username</label><input name="username" autocomplete="username" required><label>Password</label><input type="password" name="password" autocomplete="current-password" required><button class="go">Log in</button></form>`,
+  foot:`<p class="muted" style="margin-bottom:0">Don't have an account? Create one.</p><a class="alt" href="/signup">Create an account</a>`}));
 });
 app.post("/login",async(req,res)=>{
  const ip=req.ip||"unknown", a=attempts.get(ip)||{n:0,until:0};
  if(a.until>Date.now())return res.status(429).send("Too many login attempts. Try again later.");
  const user=String(req.body.username||""),pw=String(req.body.password||"");
  const owner=owners.find(o=>equal(o.user.toLowerCase(),user.trim().toLowerCase())&&verify(pw,o.hash)); // usernames are not case sensitive
- if(!owner){a.n++;if(a.n>=8){a.n=0;a.until=Date.now()+15*60*1000;}attempts.set(ip,a);await log("dashboard_login_failed",{username:user.slice(0,80),ip});return res.redirect(303,"/login?error=1"+(safeNext(req.body.next)?"&next="+encodeURIComponent(safeNext(req.body.next)):""));}
+ if(!owner){const acct=await accounts.passwordLogin(user,pw);if(acct){attempts.delete(ip);const out=await accounts.start(req,acct);return res.redirect(303,out.redirect);}a.n++;if(a.n>=8){a.n=0;a.until=Date.now()+15*60*1000;}attempts.set(ip,a);await log("dashboard_login_failed",{username:user.slice(0,80),ip});return res.redirect(303,"/login?error=1"+(safeNext(req.body.next)?"&next="+encodeURIComponent(safeNext(req.body.next)):""));}
  attempts.delete(ip);req.session.regenerate(async err=>{if(err)return res.status(500).send("Session error");req.session.owner=owner.user;req.session.deviceFingerprint=deviceFingerprint(req);req.session.createdAt=Date.now();await log("dashboard_login_success",{ip,session_ttl_minutes:120,device_bound:true},owner.user);res.redirect(303,safeNext(req.body.next)||"/dashboard");});
 });
 app.post("/dashboard/logout",logged,async(req,res)=>{const owner=req.session.owner;await log("dashboard_logout",{},owner);req.session.destroy(()=>res.redirect("/"));});

@@ -162,7 +162,7 @@ Use the URL in the matching Developer Portal field (Redirects, Interactions Endp
 
 ## Project accounts
 
-Anyone can sign up at `/signup` with Discord (uses the same `/login/callback` redirect as dashboard login). After choosing a username they land on `/dashboard/<username>`, a dashboard like the main one without the bot controls:
+Anyone can sign up at `/signup`, with Discord or with a username and password (8+ characters). Discord sign-up uses the same `/login/callback` redirect as dashboard login, and the account takes its username from the Discord account (a number is added if it is taken). Accounts log in on the same `/login` page as the dashboard owners. After signing in they land on `/dashboard/<username>`, a dashboard like the main one without the bot controls:
 
 - **Projects**: create, edit and delete up to 10 projects. Account projects are served at `/projects/<username>/<project-name>/<tab>`, for example `/projects/zed/my-bot/oauth/callback`.
 - **Project pages**: Setup (what to enter in the Developer Portal), Users (only when an OAuth project stores users) and Logs.

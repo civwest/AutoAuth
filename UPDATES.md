@@ -182,3 +182,8 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 
 ## v1.5.3
 - OAuth and invite projects can select any Discord OAuth2 scope, with setup instructions per scope and a generated authorize link.
+
+## v1.5.4
+- `/signup` now matches `/login`: Discord button above the username and password fields.
+- Login page links to Create an account. Accounts can sign up and log in with a username and password.
+- Discord sign-up takes the username from the Discord account; the username step is gone.
