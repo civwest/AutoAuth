@@ -13,12 +13,13 @@ const MODES = {
   dm: { code: "d", scope: ["identify", "guilds", "applications.commands"], userInstall: true },
   optout: { code: "o", scope: ["identify"], userInstall: false },
   all: { code: "a", scope: ["identify", "guilds.join", "guilds", "applications.commands"], userInstall: true },
+  account: { code: "u", scope: ["identify"], userInstall: false, dash: true }, // sign-up / log-in for project accounts
   link: { code: "k", scope: ["identify", "guilds", "guilds.members.read"], userInstall: false, dash: true }, // links a Discord account to a dashboard login (uses the separate login callback URL)
 };
 const BY_CODE = Object.fromEntries(Object.entries(MODES).map(([k, v]) => [v.code, k]));
 
 module.exports = function mountAuth(app, ctx) {
-  const { site, pool, enc, log, equal, verifyOrigin, optOutUser, dashDiscord, loginRedirect } = ctx;
+  const { site, pool, enc, log, equal, verifyOrigin, optOutUser, dashDiscord, loginRedirect, accountDiscord } = ctx;
   const secret = process.env.SESSION_SECRET;
   const used = new Map(); // nonce -> expiry (single-use state tokens)
   const hits = new Map(); // rate limiting
@@ -144,6 +145,13 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
     req.session.save(() => res.set("Cache-Control", "no-store").redirect(303, discordUrl("link")));
   });
 
+  // Starts Discord sign-up / log-in for project accounts.
+  app.post("/signup/discord", (req, res) => {
+    if (limited("su:" + req.ip, 20, 600000)) return res.status(429).send("Too many attempts. Try again later.");
+    req.session.acctIntent = (req.body || {}).intent === "login" ? "login" : "signup";
+    req.session.save(() => res.set("Cache-Control", "no-store").redirect(303, discordUrl("account")));
+  });
+
   // Dashboard sign-in with Discord has its own callback URL (LOGIN_REDIRECT_URI, default /login/callback). Add it under OAuth2 > Redirects in the Developer Portal.
   app.get(new URL(loginRedirect).pathname, async (req, res) => {
     res.set({ "Referrer-Policy": "no-referrer", "Cache-Control": "no-store" });
@@ -151,16 +159,17 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
     const { code, error } = req.query;
     if (error) return res.redirect(303, "/login");
     if (typeof code !== "string" || !code) return fail("Discord did not return a code. Please try again.");
-    const mode = typeof req.query.state === "string" && req.query.state && consumeState(req.query.state) === "link" ? "link" : "login";
+    const st = typeof req.query.state === "string" && req.query.state ? consumeState(req.query.state) : null;
+    const mode = st === "link" ? "link" : st === "account" ? "account" : "login";
     try {
       const r = await fetch("https://discord.com/api/v10/oauth2/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: process.env.CLIENT_ID, client_secret: process.env.CLIENT_SECRET, grant_type: "authorization_code", code, redirect_uri: loginRedirect }) });
       const t = await r.json();
       if (!r.ok) { await log("dashboard_discord_exchange_failed", { status: r.status, error: t.error }); return fail("Discord rejected the sign-in. Make sure the login callback URL is added in the Developer Portal, then try again.", 502); }
       const ur = await fetch("https://discord.com/api/v10/users/@me", { headers: { Authorization: `Bearer ${t.access_token}` } }), u = await ur.json();
       if (!ur.ok || !u.id) return fail("Discord did not return your account details. Please try again.", 502);
-      const out = await dashDiscord(req, u, mode, t);
+      const out = mode === "account" ? await accountDiscord(req, u, t) : await dashDiscord(req, u, mode, t);
       if (out.redirect) return res.redirect(303, out.redirect);
-      return res.status(out.status || 403).send(site.page("Dashboard sign-in", `<h1>${out.title || "Could not sign in"}</h1><p>${out.error}</p><p><a class="cta" href="/login">Go to the dashboard login</a></p>`, "auth"));
+      return res.status(out.status || 403).send(site.page("Dashboard sign-in", `<h1>${out.title || "Could not sign in"}</h1><p>${out.error}</p><p><a class="cta" href="${out.back || "/login"}">${out.back ? "Back" : "Go to the dashboard login"}</a></p>`, "auth"));
     } catch (e) { console.error(e); await log("dashboard_discord_error", { error: e.message }); return fail("Something went wrong. Please try again.", 500); }
   });
 

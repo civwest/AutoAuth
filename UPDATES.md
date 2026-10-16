@@ -171,3 +171,14 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 - Image cropper rebuilt in Discord's Edit Image style (circle for avatar, rectangle for banner, zoom slider, pinch and drag).
 - Removed the Discord ID field from the profile; Servers box reads "Servers you're in."
 - Removed explanatory text from dashboard pages; it now lives in the README.
+
+## v1.5.1
+- Fixed Side Projects Create/Save buttons not responding (page script ran before the dashboard helpers loaded).
+
+## v1.5.2
+- Project accounts: Discord sign-up/login at `/signup`, dashboard at `/dashboard/<username>`, projects at `/projects/<username>/<project>/<tab>`.
+- Per-project Setup, Users and Logs pages; account project data is hidden from site admins.
+- Support chat between accounts and admins (new Support tab).
+
+## v1.5.3
+- OAuth and invite projects can select any Discord OAuth2 scope, with setup instructions per scope and a generated authorize link.

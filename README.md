@@ -159,3 +159,20 @@ Dashboard > Side Projects (needs the `projects` permission) creates small Discor
 | Invite link | `/projects/<name>/invite` | client ID, permissions, scopes |
 
 Use the URL in the matching Developer Portal field (Redirects, Interactions Endpoint URL, Webhook Events URL, Terms of Service URL, Privacy Policy URL). Interactions and webhooks verify Discord's Ed25519 signature with the public key you enter. Client secrets and stored tokens are encrypted with `TOKEN_ENCRYPTION_KEY`.
+
+## Project accounts
+
+Anyone can sign up at `/signup` with Discord (uses the same `/login/callback` redirect as dashboard login). After choosing a username they land on `/dashboard/<username>`, a dashboard like the main one without the bot controls:
+
+- **Projects**: create, edit and delete up to 10 projects. Account projects are served at `/projects/<username>/<project-name>/<tab>`, for example `/projects/zed/my-bot/oauth/callback`.
+- **Project pages**: Setup (what to enter in the Developer Portal), Users (only when an OAuth project stores users) and Logs.
+- **Support**: a chat with the site admins. Admins see it under **Support** (needs the `projects` permission) and every new account appears there.
+- **Profile**: display name and the linked Discord account.
+
+Account project data (stored users, tokens, logs) is kept in separate tables (`side_project_users`, `project_logs`) and is never shown in the admin Logs or Side Projects tabs. Admins only see account names in Support. Site admin projects stay under **Side Projects** at `/projects/<name>/...`.
+
+Tables added: `accounts`, `support_messages`, `project_logs`; `side_projects` gains `owner_account` and `locked`.
+
+Not built yet: Google and X sign-in/linking, per-permission data tabs, and the automatic abuse flagging that locks a project.
+
+OAuth and invite projects list every Discord OAuth2 scope. Selecting one shows how to set it up in the project dialog and on the project's Setup page. Scopes marked "needs Discord approval" are restricted by Discord.

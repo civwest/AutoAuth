@@ -82,7 +82,14 @@ async function schema() {
  DROP TABLE IF EXISTS role_links, role_defs, role_assign, twitch_links;
  CREATE TABLE IF NOT EXISTS side_projects(slug TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL, config JSONB NOT NULL DEFAULT '{}', created_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  CREATE TABLE IF NOT EXISTS side_project_users(slug TEXT NOT NULL, user_id TEXT NOT NULL, username TEXT, access_token_enc TEXT, refresh_token_enc TEXT, expires_at BIGINT, scope TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(slug,user_id));
+ CREATE TABLE IF NOT EXISTS accounts(id BIGSERIAL PRIMARY KEY, username TEXT UNIQUE NOT NULL, display_name TEXT, discord_id TEXT UNIQUE, discord_name TEXT, avatar TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), last_login TIMESTAMPTZ);
+ CREATE TABLE IF NOT EXISTS support_messages(id BIGSERIAL PRIMARY KEY, account_id BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, from_admin BOOLEAN NOT NULL, sender TEXT, body TEXT NOT NULL, read_admin BOOLEAN NOT NULL DEFAULT FALSE, read_user BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ CREATE INDEX IF NOT EXISTS support_messages_acct ON support_messages(account_id,id);
+ CREATE TABLE IF NOT EXISTS project_logs(id BIGSERIAL PRIMARY KEY, slug TEXT NOT NULL, event_type TEXT NOT NULL, detail JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ CREATE INDEX IF NOT EXISTS project_logs_slug ON project_logs(slug,id);
  CREATE TABLE IF NOT EXISTS dashboard_discord(owner_key TEXT PRIMARY KEY, discord_id TEXT UNIQUE NOT NULL, username TEXT, linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ ALTER TABLE side_projects ADD COLUMN IF NOT EXISTS owner_account BIGINT REFERENCES accounts(id) ON DELETE CASCADE;
+ ALTER TABLE side_projects ADD COLUMN IF NOT EXISTS locked BOOLEAN NOT NULL DEFAULT FALSE;
  ALTER TABLE dashboard_discord ADD COLUMN IF NOT EXISTS access_token_enc TEXT;
  ALTER TABLE dashboard_discord ADD COLUMN IF NOT EXISTS refresh_token_enc TEXT;
  ALTER TABLE dashboard_discord ADD COLUMN IF NOT EXISTS expires_at BIGINT;
@@ -297,8 +304,9 @@ async function dashDiscord(req,u,intent,t){
  await log("dashboard_login_success",{method:"discord",session_ttl_minutes:120,device_bound:true},owner.user);
  return {redirect:"/dashboard"};
 }
-const projects=require("./projects")({pool,enc,dec,log,express}); projects.mountPublic({app,site}); // /projects/<name>/...
-require("./auth")(app,{site,pool,enc,log,equal,verifyOrigin,optOutUser,dashDiscord,loginRedirect:LOGIN_REDIRECT}); // /auth, /auth/start, /oauth/callback
+const projects=require("./projects")({pool,enc,dec,log,express}); projects.mountPublic({app,site}); // /projects/<name>/... and /projects/<user>/<name>/...
+const accounts=require("./accounts")({pool,enc,dec,log,express,projects,site,esc}); accounts.mountPublic(app);
+require("./auth")(app,{site,pool,enc,log,equal,verifyOrigin,optOutUser,dashDiscord,accountDiscord:accounts.accountDiscord,loginRedirect:LOGIN_REDIRECT}); // /auth, /auth/start, /oauth/callback
 
 const DISCORD_PATH=require("./icons").discord;
 function discordLoginUrl(){ const u=new URL("https://discord.com/oauth2/authorize"); u.searchParams.set("client_id",process.env.CLIENT_ID); u.searchParams.set("response_type","code"); u.searchParams.set("redirect_uri",LOGIN_REDIRECT); u.searchParams.set("scope","identify guilds guilds.members.read"); return u.toString(); }
@@ -318,7 +326,7 @@ app.post("/login",async(req,res)=>{
 app.post("/dashboard/logout",logged,async(req,res)=>{const owner=req.session.owner;await log("dashboard_logout",{},owner);req.session.destroy(()=>res.redirect("/"));});
 
 dash=require("./dashboard")({app,express,pool,client,esc,log,logged,verifyOrigin,displayActor,displayDetail,ActivityType,
-  core:{projects,linkedGuilds,unlinkDiscord,admins:owners,ADMIN_PERMS,OWNER_IDS,isExpired,addUserToGuild,addAllToGuild,kickFromGuild,optOutUser,sendDmTo,connectDiscord,discordState,shutdownBot}});
+  core:{projects,accounts,linkedGuilds,unlinkDiscord,admins:owners,ADMIN_PERMS,OWNER_IDS,isExpired,addUserToGuild,addAllToGuild,kickFromGuild,optOutUser,sendDmTo,connectDiscord,discordState,shutdownBot}});
 
 // ---------- Discord events ----------
 const onInteraction=async i=>{
