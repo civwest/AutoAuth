@@ -4,7 +4,7 @@ const crypto = require("node:crypto");
 
 const TYPES = {
   oauth: { label: "OAuth2 callback", path: "/oauth/callback",
-    fields: [["client_id", "Client ID"], ["client_secret", "Client secret", "secret"], ["message", "Success message"], ["redirect", "Redirect after success (https, optional)"], ["scopes", "Permissions to ask for", "scopes"], ["store", "Store users and tokens", "bool"]] },
+    fields: [["client_id", "Client ID"], ["client_secret", "Client secret", "secret"], ["message", "Success message"], ["redirect", "Redirect after success (https, optional)"], ["scopes", "Permissions to ask for", "scopes"], ["bot_token", "Bot token (only to add users to servers)", "secret_opt"], ["store", "Store users and tokens", "bool"]] },
   interactions: { label: "Interactions endpoint", path: "/interactions",
     fields: [["public_key", "Public key"], ["reply", "Reply to commands"]] },
   webhook: { label: "Webhook events", path: "/webhook", fields: [["public_key", "Public key"]] },
@@ -60,7 +60,7 @@ const SCOPE_KEYS = new Set(SCOPES.map((s) => s[0]));
 const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 const ED25519_DER = Buffer.from("302a300506032b6570032100", "hex");
 
-module.exports = function createProjects({ pool, enc, dec, log, express }) {
+module.exports = function createProjects({ pool, enc, dec, log, express, collect, dataScopes }) {
   const origin = () => { try { return new URL(process.env.REDIRECT_URI).origin; } catch { return ""; } };
   const urlOf = (p) => `${origin()}/projects/${p.slug}${TYPES[p.type].path}`;
   const hits = new Map();
@@ -104,6 +104,7 @@ module.exports = function createProjects({ pool, enc, dec, log, express }) {
           ON CONFLICT(slug,user_id) DO UPDATE SET username=$3,access_token_enc=$4,refresh_token_enc=$5,expires_at=$6,scope=$7,created_at=NOW()`,
           [p.slug, u.id, u.global_name || u.username || u.id, enc(t.access_token), enc(t.refresh_token || ""), Date.now() + Number(t.expires_in || 604800) * 1000, String(t.scope || "")]);
         else fetch("https://discord.com/api/v10/oauth2/token/revoke", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: c.client_id, client_secret: dec(c.client_secret_enc), token: t.access_token, token_type_hint: "access_token" }) }).catch(() => {});
+        if (c.store && collect && p.owner_account) await collect(p, u, t);
         await plog(p, "project_oauth_success", { slug: p.slug, user_id: u.id, username: u.global_name || u.username, scope: String(t.scope || ""), stored: !!c.store });
         if (c.redirect) return res.redirect(303, c.redirect);
         return page(res, 200, p.name, `<h1>${html(c.message || "Authorized")}</h1>`);
@@ -147,13 +148,17 @@ module.exports = function createProjects({ pool, enc, dec, log, express }) {
   function clean(type, input, old) {
     const t = TYPES[type], i = input || {}, out = {}, str = (v, n) => String(v ?? "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "").trim().slice(0, n);
     for (const [k, , kind] of t.fields) {
-      if (kind === "secret") {
+      if (kind === "secret_opt") {
+        const v = str(i[k], 200);
+        if (v) out[k + "_enc"] = enc(v); else if (old && old[k + "_enc"]) out[k + "_enc"] = old[k + "_enc"];
+      } else if (kind === "secret") {
         const v = str(i[k], 120);
         if (v) out[k + "_enc"] = enc(v); else if (old && old[k + "_enc"]) out[k + "_enc"] = old[k + "_enc"]; else throw new Error("Client secret is required.");
       } else if (kind === "scopes") out[k] = [...new Set(String(i[k] ?? "").split(/[\s,]+/).filter((x) => SCOPE_KEYS.has(x)))].join(" ");
       else if (kind === "bool") out[k] = !!i[k];
       else out[k] = str(i[k], kind === "area" ? 20000 : 300);
     }
+    if (type === "oauth" && dataScopes && out.scopes.split(" ").some((s) => dataScopes.has(s))) out.store = true;
     if ("client_id" in out && !/^\d{17,20}$/.test(out.client_id)) throw new Error("Client ID must be 17 to 20 digits.");
     if ("public_key" in out && !/^[0-9a-f]{64}$/i.test(out.public_key)) throw new Error("Public key must be 64 hex characters.");
     if ("redirect" in out && out.redirect && !/^https:\/\/[^\s]{3,280}$/i.test(out.redirect)) throw new Error("Redirect must be an https URL.");
@@ -165,7 +170,7 @@ module.exports = function createProjects({ pool, enc, dec, log, express }) {
   // ---------- dashboard ----------
   const json = (o) => JSON.stringify(o).replace(/</g, "\\u003c");
   function editor(rows, base, esc, o = {}) {
-      const view = rows.map((p) => ({ slug: p.slug, name: p.name, type: p.type, url: o.urlFn ? o.urlFn(p) : urlOf(p), config: Object.fromEntries(Object.entries(p.config || {}).filter(([k]) => !k.endsWith("_enc"))), hasSecret: !!(p.config || {}).client_secret_enc }));
+      const view = rows.map((p) => ({ slug: p.slug, name: p.name, type: p.type, url: o.urlFn ? o.urlFn(p) : urlOf(p), config: Object.fromEntries(Object.entries(p.config || {}).filter(([k]) => !k.endsWith("_enc"))), hasSecret: !!(p.config || {}).client_secret_enc, hasBot: !!(p.config || {}).bot_token_enc }));
       const types = Object.fromEntries(Object.entries(TYPES).map(([k, v]) => [k, { label: v.label, path: v.path, fields: v.fields }]));
       return `<div class="top"><div><h1>${o.title || "Side Projects"}</h1></div><button type="button" class="green" onclick="spOpen()">Create project</button></div>
 <div class="card"><div class="wrap"><table class="stack"><tr><th>Name</th><th>Type</th><th>URL</th><th style="text-align:right">Actions</th></tr>
@@ -185,7 +190,7 @@ function spFields(){var t=SP.types[$('sp-type').value],box=$('sp-fields'),c=spEd
    SP.scopes.forEach(function(s){var l=document.createElement('label'),cb=document.createElement('input');cb.type='checkbox';cb.value=s[0];cb.style.width='auto';cb.checked=sel.indexOf(s[0])>-1;cb.addEventListener('change',spNotes);l.style.cssText='display:flex;gap:8px;align-items:flex-start;margin:4px 0;font-weight:400';l.appendChild(cb);var tx=document.createElement('span');tx.textContent=s[0]+' - '+s[1]+(s[3]?' (needs Discord approval)':'');l.appendChild(tx);wrap.appendChild(l);});
    wrap.dataset.k=k;wrap.dataset.kind='scopes';box.appendChild(lab);box.appendChild(wrap);var nt=document.createElement('div');nt.id='sp-notes';nt.style.marginTop='10px';box.appendChild(nt);return;}
   if(f[2]==='bool'){el=document.createElement('input');el.type='checkbox';el.style.width='auto';el.checked=!!c[k];lab.style.display='flex';lab.style.gap='8px';lab.style.alignItems='center';lab.insertBefore(el,lab.firstChild);box.appendChild(lab);}
-  else{el=f[2]==='area'?document.createElement('textarea'):document.createElement('input');if(f[2]==='secret'){el.type='password';el.autocomplete='new-password';el.placeholder=spEdit&&spEdit.hasSecret?'Saved. Leave blank to keep':'';}else el.value=c[k]||'';if(f[2]==='area')el.style.minHeight='140px';box.appendChild(lab);box.appendChild(el);}
+  else{el=f[2]==='area'?document.createElement('textarea'):document.createElement('input');if(f[2]==='secret'||f[2]==='secret_opt'){el.type='password';el.autocomplete='new-password';el.placeholder=spEdit&&(f[2]==='secret'?spEdit.hasSecret:spEdit.hasBot)?'Saved. Leave blank to keep':'';}else el.value=c[k]||'';if(f[2]==='area')el.style.minHeight='140px';box.appendChild(lab);box.appendChild(el);}
   el.dataset.k=k;el.dataset.kind=f[2]||'';});spUrl();spNotes();}
 function spChecked(){var w=document.querySelector('#sp-fields [data-kind=scopes]');return w?[].slice.call(w.querySelectorAll('input:checked')).map(function(i){return i.value;}):[];}
 function spNotes(){var n=$('sp-notes');if(!n)return;n.innerHTML='';var ch=spChecked();if(!ch.length)return;var h=document.createElement('b');h.textContent='How to set these up';n.appendChild(h);ch.forEach(function(k){var s=SP.scopes.filter(function(x){return x[0]===k;})[0],d=document.createElement('div');d.style.margin='6px 0';d.style.fontSize='13px';d.textContent=k+': '+s[2];n.appendChild(d);});}

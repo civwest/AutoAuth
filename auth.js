@@ -148,7 +148,7 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
   // Starts Discord sign-up / log-in for project accounts.
   app.post("/signup/discord", (req, res) => {
     if (limited("su:" + req.ip, 20, 600000)) return res.status(429).send("Too many attempts. Try again later.");
-    req.session.acctIntent = (req.body || {}).intent === "login" ? "login" : "signup";
+    const it = (req.body || {}).intent; req.session.acctIntent = it === "login" ? "login" : it === "link" && req.session.acct ? "link" : "signup";
     req.session.save(() => res.set("Cache-Control", "no-store").redirect(303, discordUrl("account")));
   });
 

@@ -173,6 +173,38 @@ Account project data (stored users, tokens, logs) is kept in separate tables (`s
 
 Tables added: `accounts`, `support_messages`, `project_logs`; `side_projects` gains `owner_account` and `locked`.
 
-Not built yet: Google and X sign-in/linking, per-permission data tabs, and the automatic abuse flagging that locks a project.
 
 OAuth and invite projects list every Discord OAuth2 scope. Selecting one shows how to set it up in the project dialog and on the project's Setup page. Scopes marked "needs Discord approval" are restricted by Discord.
+
+### Google and X sign-in
+
+Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, and/or `X_CLIENT_ID` and `X_CLIENT_SECRET`. A button appears on `/login`, `/signup` and the account profile only when its pair is set. Add these redirect URIs with each provider:
+
+- Google (Cloud Console > Credentials > OAuth client, Web application): `https://<your domain>/auth/google/callback`
+- X (Developer Portal > your app > User authentication settings, OAuth 2.0, confidential client, scopes `users.read tweet.read`): `https://<your domain>/auth/x/callback`
+
+Signing up with a service uses the name on that account as the username. Accounts can also link Discord, Google and X from Profile, change their password, or delete the account (this removes their projects, stored users, data and support messages).
+
+### Data tabs
+
+For OAuth projects, the permissions selected decide which tabs appear on the project's dashboard. Selecting any of them turns on Store users and tokens. Data is encrypted with `TOKEN_ENCRYPTION_KEY`.
+
+| Permission | Tab |
+|---|---|
+| `identify` | Users (remove a user and their data) |
+| `email` | Emails, with CSV download |
+| `connections` | Connections |
+| `guilds` | Servers |
+| `webhook.incoming` | Webhooks (send a message to a user's webhook) |
+| `guilds.join` | Add to server (needs the project's bot token; 100 users at a time) |
+
+### Abuse flagging
+
+Applies only to account projects. A project is locked automatically when it adds members to `FLAG_GUILDS_24H` (default 30) different servers within 24 hours, or more than `FLAG_MEMBERS_1H` (default 100) members within an hour. When that happens:
+
+- The project's public endpoints stop working and its dashboard shows it as locked.
+- The owner gets a Support message explaining why and that admins cannot see their data.
+- Each affected person gets a DM from the bot with an apology and a link to `/report/<id>` to share evidence. The DM only reaches people the bot is allowed to message.
+- It appears under **Flags** on the admin Support tab (project name, owner, reason, reports). Admins can unlock it or keep it locked and mark it resolved. Admins never see the project's data.
+
+Tables added: `account_identities`, `project_data`, `project_flags`, `flag_reports`.

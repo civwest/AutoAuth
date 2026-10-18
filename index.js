@@ -89,6 +89,11 @@ async function schema() {
  CREATE INDEX IF NOT EXISTS project_logs_slug ON project_logs(slug,id);
  CREATE TABLE IF NOT EXISTS dashboard_discord(owner_key TEXT PRIMARY KEY, discord_id TEXT UNIQUE NOT NULL, username TEXT, linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  ALTER TABLE accounts ADD COLUMN IF NOT EXISTS password_hash TEXT;
+ CREATE TABLE IF NOT EXISTS project_data(slug TEXT NOT NULL, user_id TEXT NOT NULL, kind TEXT NOT NULL, data_enc TEXT NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(slug,user_id,kind));
+ CREATE TABLE IF NOT EXISTS project_flags(id BIGSERIAL PRIMARY KEY, slug TEXT NOT NULL, account_id BIGINT, project_name TEXT, reason TEXT NOT NULL, affected INT NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'open', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ CREATE TABLE IF NOT EXISTS flag_reports(id BIGSERIAL PRIMARY KEY, flag_id BIGINT NOT NULL REFERENCES project_flags(id) ON DELETE CASCADE, contact TEXT, body TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ CREATE TABLE IF NOT EXISTS account_identities(account_id BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, provider TEXT NOT NULL, subject TEXT NOT NULL, name TEXT, linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(provider,subject));
+ CREATE INDEX IF NOT EXISTS account_identities_acct ON account_identities(account_id);
  ALTER TABLE side_projects ADD COLUMN IF NOT EXISTS owner_account BIGINT REFERENCES accounts(id) ON DELETE CASCADE;
  ALTER TABLE side_projects ADD COLUMN IF NOT EXISTS locked BOOLEAN NOT NULL DEFAULT FALSE;
  ALTER TABLE dashboard_discord ADD COLUMN IF NOT EXISTS access_token_enc TEXT;
@@ -305,8 +310,9 @@ async function dashDiscord(req,u,intent,t){
  await log("dashboard_login_success",{method:"discord",session_ttl_minutes:120,device_bound:true},owner.user);
  return {redirect:"/dashboard"};
 }
-const projects=require("./projects")({pool,enc,dec,log,express}); projects.mountPublic({app,site}); // /projects/<name>/... and /projects/<user>/<name>/...
-const accounts=require("./accounts")({pool,enc,dec,log,express,projects,site,esc,isOwnerName:u=>owners.some(o=>o.user.toLowerCase()===String(u).toLowerCase())}); accounts.mountPublic(app);
+const pdata=require("./pdata")({pool,enc,dec,log,express,esc,site,origin:()=>{try{return new URL(process.env.REDIRECT_URI).origin;}catch{return "";}}});
+const projects=require("./projects")({pool,enc,dec,log,express,collect:pdata.collect,dataScopes:pdata.DATA_SCOPES}); projects.mountPublic({app,site}); // /projects/<name>/... and /projects/<user>/<name>/...
+const accounts=require("./accounts")({pool,enc,dec,log,express,projects,pdata,site,esc,isOwnerName:u=>owners.some(o=>o.user.toLowerCase()===String(u).toLowerCase())}); accounts.mountPublic(app);
 require("./auth")(app,{site,pool,enc,log,equal,verifyOrigin,optOutUser,dashDiscord,accountDiscord:accounts.accountDiscord,accountLogin:accounts.accountLogin,loginRedirect:LOGIN_REDIRECT}); // /auth, /auth/start, /oauth/callback
 
 const DISCORD_PATH=require("./icons").discord;
@@ -315,7 +321,7 @@ app.get("/dashboard/login",(req,res)=>res.redirect(302,"/login"));
 app.get("/login",(req,res)=>{
  if(req.session.owner)return res.redirect(safeNext(req.query.next)||"/dashboard");
  if(req.session.acct)return res.redirect(303,"/dashboard/"+req.session.acct.username);
- res.send(accounts.authPage({title:"AutoAuth Login",sub:"Log in",error:req.query.error?"Login failed. Check username and password.":"",top:accounts.discordLink(discordLoginUrl(),"Log in with Discord"),
+ res.send(accounts.authPage({title:"AutoAuth Login",sub:"Log in",error:req.query.error?"Login failed. Check username and password.":"",top:accounts.discordLink(discordLoginUrl(),"Log in with Discord")+accounts.socialButtons("login"),
   form:`<form method="post"><input type="hidden" name="next" value="${esc(safeNext(req.query.next))}"><label>Username</label><input name="username" autocomplete="username" required><label>Password</label><input type="password" name="password" autocomplete="current-password" required><button class="go">Log in</button></form>`,
   foot:`<p class="muted" style="margin-bottom:0">Don't have an account? Create one.</p><a class="alt" href="/signup">Create an account</a>`}));
 });

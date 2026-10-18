@@ -1,0 +1,96 @@
+"use strict";
+// Google and X sign-up, log-in and account linking for project accounts. Each provider only appears when its credentials are set.
+const crypto = require("node:crypto");
+
+const GOOGLE_G = '<svg viewBox="0 0 48 48" width="22" height="22" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>';
+const X_LOGO = '<svg viewBox="0 0 24 24" width="20" height="20" fill="#fff" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>';
+
+const PROV = {
+  google: {
+    label: "Google", id: "GOOGLE_CLIENT_ID", secret: "GOOGLE_CLIENT_SECRET", logo: GOOGLE_G,
+    style: "background:#fff;color:#1f1f1f;border:1px solid #dadce0",
+    auth: "https://accounts.google.com/o/oauth2/v2/auth", token: "https://oauth2.googleapis.com/token", scope: "openid email profile",
+    async me(tok) {
+      const r = await fetch("https://openidconnect.googleapis.com/v1/userinfo", { headers: { Authorization: "Bearer " + tok } }), j = await r.json();
+      if (!r.ok || !j.sub) throw new Error("Google profile failed");
+      return { subject: String(j.sub), name: j.name || (j.email ? j.email.split("@")[0] : ""), handle: j.email ? j.email.split("@")[0] : j.name };
+    },
+  },
+  x: {
+    label: "X", id: "X_CLIENT_ID", secret: "X_CLIENT_SECRET", logo: X_LOGO,
+    style: "background:#000;color:#fff;border:1px solid #444",
+    auth: "https://x.com/i/oauth2/authorize", token: "https://api.x.com/2/oauth2/token", scope: "users.read tweet.read", basic: true,
+    async me(tok) {
+      const r = await fetch("https://api.x.com/2/users/me", { headers: { Authorization: "Bearer " + tok } }), j = await r.json();
+      if (!r.ok || !j.data || !j.data.id) throw new Error("X profile failed");
+      return { subject: String(j.data.id), name: j.data.name || j.data.username, handle: j.data.username };
+    },
+  },
+};
+
+module.exports = function createSocial(h) {
+  const { pool, log, esc, origin, clip, save, limited, slugName, freeUsername, createAccount, start, authPage } = h;
+  const on = (k) => !!(process.env[PROV[k].id] && process.env[PROV[k].secret]);
+  const redirectUri = (k) => `${origin()}/auth/${k}/callback`;
+  const b64 = (b) => b.toString("base64url");
+
+  // Sign-in buttons for the login and signup pages (and the profile link buttons).
+  const buttons = (intent) => Object.keys(PROV).filter(on).map((k) =>
+    `<a href="/auth/${k}/start?intent=${intent}" style="display:flex;align-items:center;justify-content:center;gap:10px;padding:12px;border-radius:6px;text-decoration:none;font-weight:600;${PROV[k].style}">${PROV[k].logo}${intent === "signup" ? "Sign up" : intent === "link" ? "Link" : "Log in"} with ${PROV[k].label}</a>`).join("");
+
+  const identities = async (accountId) => (await pool.query("SELECT provider,subject,name FROM account_identities WHERE account_id=$1", [accountId])).rows;
+
+  function mountPublic(app) {
+    const fail = (res, msg, back) => res.status(400).set("Cache-Control", "no-store").send(authPage({ title: "Sign in", sub: "Could not sign in", error: msg, top: "", form: "", foot: `<a class="alt" href="${back || "/login"}">Back</a>` }).replace('<div class="or"><span></span>or<span></span></div>', ""));
+
+    app.get("/auth/:provider/start", async (req, res) => {
+      const k = req.params.provider, P = PROV[k];
+      if (!P || !on(k)) return res.status(404).send("Not found");
+      const intent = ["signup", "login", "link"].includes(req.query.intent) ? req.query.intent : "login";
+      if (intent === "link" && !(req.session && req.session.acct)) return res.redirect(303, "/login");
+      if (limited("os:" + req.ip, 30, 600000)) return res.status(429).send("Too many attempts. Try again later.");
+      const state = crypto.randomBytes(16).toString("hex"), verifier = b64(crypto.randomBytes(32));
+      req.session.oa = { state, verifier, intent, provider: k, until: Date.now() + 10 * 60 * 1000 };
+      await save(req);
+      const u = new URL(P.auth);
+      u.searchParams.set("client_id", process.env[P.id]); u.searchParams.set("response_type", "code"); u.searchParams.set("redirect_uri", redirectUri(k));
+      u.searchParams.set("scope", P.scope); u.searchParams.set("state", state);
+      u.searchParams.set("code_challenge", b64(crypto.createHash("sha256").update(verifier).digest())); u.searchParams.set("code_challenge_method", "S256");
+      res.set("Cache-Control", "no-store").redirect(303, u.toString());
+    });
+
+    app.get("/auth/:provider/callback", async (req, res) => {
+      res.set({ "Referrer-Policy": "no-referrer", "Cache-Control": "no-store" });
+      const k = req.params.provider, P = PROV[k], o = req.session && req.session.oa;
+      if (!P || !on(k)) return res.status(404).send("Not found");
+      if (!o || o.provider !== k || o.until < Date.now() || typeof req.query.state !== "string" || req.query.state !== o.state) return fail(res, "This sign-in expired or was opened twice. Please try again.");
+      delete req.session.oa; await save(req);
+      if (req.query.error) return res.redirect(303, o.intent === "link" && req.session.acct ? `/dashboard/${req.session.acct.username}/profile` : "/login");
+      if (typeof req.query.code !== "string" || !req.query.code) return fail(res, `${P.label} did not return a code.`);
+      try {
+        const body = new URLSearchParams({ grant_type: "authorization_code", code: req.query.code, redirect_uri: redirectUri(k), code_verifier: o.verifier, client_id: process.env[P.id] });
+        const headers = { "Content-Type": "application/x-www-form-urlencoded" };
+        if (P.basic) headers.Authorization = "Basic " + Buffer.from(`${process.env[P.id]}:${process.env[P.secret]}`).toString("base64"); else body.set("client_secret", process.env[P.secret]);
+        const t = await (await fetch(P.token, { method: "POST", headers, body })).json();
+        if (!t.access_token) { await log("account_social_failed", { provider: k, error: t.error }); return fail(res, `${P.label} rejected the sign-in.`); }
+        const me = await P.me(t.access_token);
+        const found = (await pool.query("SELECT a.id,a.username FROM account_identities i JOIN accounts a ON a.id=i.account_id WHERE i.provider=$1 AND i.subject=$2", [k, me.subject])).rows[0];
+        if (o.intent === "link") {
+          const s = req.session.acct; if (!s) return res.redirect(303, "/login");
+          if (found && String(found.id) !== s.id) return fail(res, `That ${P.label} account is linked to another account.`, `/dashboard/${s.username}/profile`);
+          await pool.query("INSERT INTO account_identities(account_id,provider,subject,name) VALUES($1,$2,$3,$4) ON CONFLICT(provider,subject) DO UPDATE SET name=$4", [s.id, k, me.subject, clip(me.name, 80)]);
+          req.session.flash = `${P.label} linked.`; await save(req);
+          return res.redirect(303, `/dashboard/${s.username}/profile`);
+        }
+        if (found) { const out = await start(req, found); return res.redirect(303, out.redirect); }
+        if (o.intent === "login") return fail(res, `There is no account for this ${P.label} user yet.`, "/signup");
+        const name = clip(me.name || me.handle, 60) || k;
+        const acct = await createAccount({ username: await freeUsername(slugName(me.handle || me.name)), name });
+        await pool.query("INSERT INTO account_identities(account_id,provider,subject,name) VALUES($1,$2,$3,$4)", [acct.id, k, me.subject, clip(me.name, 80)]);
+        const out = await start(req, acct); res.redirect(303, out.redirect);
+      } catch (e) { console.error(e); await log("account_social_error", { provider: k, error: e.message }); fail(res, "Something went wrong. Please try again."); }
+    });
+  }
+
+  return { PROV, on, buttons, identities, mountPublic };
+};

@@ -187,3 +187,9 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 - `/signup` now matches `/login`: Discord button above the username and password fields.
 - Login page links to Create an account. Accounts can sign up and log in with a username and password.
 - Discord sign-up takes the username from the Discord account; the username step is gone.
+
+## v1.5.5
+- Google and X sign-up, log-in and linking for project accounts (buttons appear when credentials are set); Discord, Google and X linking and password change on the profile.
+- Delete account button on the profile.
+- Data tabs per selected permission (Emails, Connections, Servers, Webhooks) and an Add to server tool for `guilds.join`.
+- Automatic abuse flagging for account projects: lock, apology DMs with a report page, owner notice, and an admin Flags list.
