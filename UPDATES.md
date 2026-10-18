@@ -193,3 +193,7 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 - Delete account button on the profile.
 - Data tabs per selected permission (Emails, Connections, Servers, Webhooks) and an Add to server tool for `guilds.join`.
 - Automatic abuse flagging for account projects: lock, apology DMs with a report page, owner notice, and an admin Flags list.
+
+## v1.5.6
+- Discord, Google and X buttons are now the same size on login, signup and profile.
+- Profile shows Link buttons for Discord, Google and X, and Unlink buttons for each linked account. Google and X show even before their credentials are set; the button then explains the provider is not set up.

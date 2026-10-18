@@ -34,9 +34,20 @@ module.exports = function createSocial(h) {
   const redirectUri = (k) => `${origin()}/auth/${k}/callback`;
   const b64 = (b) => b.toString("base64url");
 
-  // Sign-in buttons for the login and signup pages (and the profile link buttons).
-  const buttons = (intent) => Object.keys(PROV).filter(on).map((k) =>
-    `<a href="/auth/${k}/start?intent=${intent}" style="display:flex;align-items:center;justify-content:center;gap:10px;padding:12px;border-radius:6px;text-decoration:none;font-weight:600;${PROV[k].style}">${PROV[k].logo}${intent === "signup" ? "Sign up" : intent === "link" ? "Link" : "Log in"} with ${PROV[k].label}</a>`).join("");
+  // Every sign-in button (Discord, Google, X) uses the same box so they match in size.
+  const DISCORD_LOGO = '<svg viewBox="0 0 24 24" width="22" height="22" fill="#fff" aria-hidden="true"><path d="' + require("./icons").discord + '"/></svg>';
+  const KINDS = { discord: { logo: DISCORD_LOGO, style: "background:#5865F2;color:#fff;border:1px solid #5865F2", label: "Discord" }, google: { logo: PROV.google.logo, style: PROV.google.style, label: "Google" }, x: { logo: PROV.x.logo, style: PROV.x.style, label: "X" } };
+  const BOX = "display:flex;align-items:center;justify-content:center;gap:10px;box-sizing:border-box;width:100%;height:46px;margin:0 0 10px;padding:0 16px;border-radius:6px;font:600 16px/1 system-ui,sans-serif;text-decoration:none;cursor:pointer;white-space:nowrap;";
+  const btn = (kind, label, to) => {
+    const K = KINDS[kind], inner = `${K.logo}${label}`, st = BOX + K.style;
+    if (to.post) return `<form method="post" action="${to.post}" style="margin:0">${Object.entries(to.fields || {}).map(([n, v]) => `<input type="hidden" name="${n}" value="${esc(v)}">`).join("")}<button type="submit" style="${st}">${inner}</button></form>`;
+    return `<a href="${esc(to.href)}" style="${st}">${inner}</a>`;
+  };
+  const verb = (intent) => (intent === "signup" ? "Sign up" : intent === "link" ? "Link" : "Log in");
+  // Login and signup pages: only providers that are set up.
+  const buttons = (intent) => Object.keys(PROV).filter(on).map((k) => btn(k, `${verb(intent)} with ${PROV[k].label}`, { href: `/auth/${k}/start?intent=${intent}` })).join("");
+  // Profile: always shown, so the account can be linked as soon as the provider is set up.
+  const linkButton = (k) => btn(k, `Link ${PROV[k].label}`, { href: `/auth/${k}/start?intent=link` });
 
   const identities = async (accountId) => (await pool.query("SELECT provider,subject,name FROM account_identities WHERE account_id=$1", [accountId])).rows;
 
@@ -45,7 +56,8 @@ module.exports = function createSocial(h) {
 
     app.get("/auth/:provider/start", async (req, res) => {
       const k = req.params.provider, P = PROV[k];
-      if (!P || !on(k)) return res.status(404).send("Not found");
+      if (!P) return res.status(404).send("Not found");
+      if (!on(k)) return res.status(503).send(authPage({ title: "Sign in", sub: `${P.label} sign-in is not set up yet`, error: "", top: "", form: "", foot: `<a class="alt" href="${req.session && req.session.acct ? `/dashboard/${req.session.acct.username}/profile` : "/login"}">Back</a>` }).replace('<div class="or"><span></span>or<span></span></div>', ""));
       const intent = ["signup", "login", "link"].includes(req.query.intent) ? req.query.intent : "login";
       if (intent === "link" && !(req.session && req.session.acct)) return res.redirect(303, "/login");
       if (limited("os:" + req.ip, 30, 600000)) return res.status(429).send("Too many attempts. Try again later.");
@@ -92,5 +104,5 @@ module.exports = function createSocial(h) {
     });
   }
 
-  return { PROV, on, buttons, identities, mountPublic };
+  return { PROV, on, buttons, linkButton, btn, identities, mountPublic };
 };
