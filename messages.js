@@ -64,12 +64,26 @@ module.exports = function mountMessages(c) {
 <div class="card" style="max-width:640px;overflow:hidden"><div class="banner" style="${bannerStyle(p)}"></div><div style="display:flex;gap:16px;align-items:flex-end;margin-top:-48px">${avatar(p, "lg")}<div style="padding-bottom:6px"><h2 style="margin:0">${esc(p.name)}</h2><div class="muted">${esc(p.user)}${p.pronouns ? " · " + esc(p.pronouns) : ""}</div></div></div>
 <p>${p.emoji || p.status ? `${esc(p.emoji)} ${esc(p.status)}` : '<span class="muted">No status set</span>'}</p>
 ${p.discord ? `<h3>Discord</h3><p>${discordHref(p.discord) ? `<a href="${esc(discordHref(p.discord))}" target="_blank" rel="noopener noreferrer nofollow" style="text-decoration:underline">${esc(p.discord)}</a>` : esc(p.discord)}</p>` : ""}${p.bio ? `<h3>About</h3><p style="white-space:pre-wrap">${esc(p.bio)}</p>` : ""}${local ? `<h3>Local time</h3><p>${esc(local)}</p>` : ""}${links ? `<h3>Links</h3>${links}` : ""}</div>${!mine && !other ? "" : ""}`;
-    render(req, res, "profile", content);
+    render(req, res, "profile", content + (mine ? await linkedCard(req) : ""));
+  });
+
+  // Connect / disconnect Discord, Google and X for signing in to the dashboard.
+  async function linkedCard(req) {
+    const social = c.social, dl = (await pool.query("SELECT discord_id,username FROM dashboard_discord WHERE owner_key=$1", [req.me])).rows[0];
+    const ids = c.ownerIdent ? await c.ownerIdent.list(req.me) : [];
+    const unl = (action) => `<form method="post" action="${action}" style="margin:0"><button class="secondary" style="width:auto">Unlink</button></form>`;
+    const row = (label, linked, link, unlink) => `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)"><div style="flex:1;min-width:120px"><b>${label}</b><div class="muted">${linked ? esc(linked) : "Not linked"}</div></div>${linked ? unlink : `<div style="width:230px;max-width:100%">${link}</div>`}</div>`;
+    const rows = [row("Discord", dl && (dl.username || dl.discord_id), social.btn("discord", "Link Discord", { post: "/users/profile/discord-link", fields: { return: "/users/profile" } }), unl("/users/profile/discord-unlink"))]
+      .concat(["google", "x"].map((k) => { const i = ids.find((x) => x.provider === k); return row(social.PROV[k].label, i && (i.name || "Linked"), social.btn(k, `Link ${social.PROV[k].label}`, { href: `/auth/${k}/start?intent=olink` }), unl(`/users/profile/unlink/${k}`)); }));
+    return `<div class="card" style="max-width:640px;margin-top:16px"><h2>Linked accounts</h2>${rows.join("")}</div>`;
+  }
+  app.post("/users/profile/unlink/:provider", logged, owner, verifyOrigin, async (req, res) => {
+    if (["google", "x"].includes(req.params.provider) && c.ownerIdent) { await c.ownerIdent.unlink(req.me, req.params.provider); req.session.flash = "Unlinked."; }
+    res.redirect(303, "/users/profile");
   });
 
   app.get("/users/profile/edit", logged, owner, async (req, res) => {
     const p = await getProfile(req.me);
-    const dl = (await pool.query("SELECT discord_id,username FROM dashboard_discord WHERE owner_key=$1", [req.me])).rows[0];
     let zones = []; try { zones = Intl.supportedValuesOf("timeZone"); } catch {}
     const content = `<div class="top"><div><h1>Edit profile</h1></div><a class="btn secondary" href="/users/profile">Cancel</a></div>
 <div class="card" style="max-width:640px"><label style="margin-top:0">Banner</label><div id="bn-prev" class="bnprev" style="${bannerStyle(p)}"></div>
@@ -84,7 +98,7 @@ ${p.discord ? `<h3>Discord</h3><p>${discordHref(p.discord) ? `<a href="${esc(dis
 <label>Links (one per line, up to 3, https only)</label><textarea id="pf-links" maxlength="400" style="min-height:70px">${esc(p.links)}</textarea>
 <label>Profile colour</label><input type="color" id="pf-accent" value="${esc(p.accent)}" style="width:80px;height:40px;padding:2px">
 <div style="margin-top:16px"><button type="button" class="green" id="pf-save">Save profile</button></div></div>
-<div class="card" style="max-width:640px;margin-top:16px"><h2>Sign in with Discord</h2>${dl ? `<p>Linked to Discord account <b>${esc(dl.username || dl.discord_id)}</b> (${esc(dl.discord_id)}). </p><form method="post" action="/users/profile/discord-unlink"><button class="danger">Unlink Discord</button></form>` : `<form method="post" action="/users/profile/discord-link"><button class="dbtn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="${require("./icons").discord}"/></svg>Link with Discord</button></form>`}</div>
+
 <dialog id="dlg-crop" class="crop-dlg"><div class="cr-head">Edit Image</div>
 <div class="cr-stage"><div class="crop-wrap" id="cr-wrap"><canvas id="cr-cv"></canvas><div class="crop-mask" id="cr-mask"></div></div></div>
 <div class="cr-zoom"><svg viewBox="0 0 24 24" width="16" height="16" fill="#9da7b3"><path d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2zM8.5 13.5l2.5 3 3.5-4.5 4.5 6H5l3.5-4.5z"/></svg><input type="range" id="cr-zoom" min="0" max="100" value="0"><svg viewBox="0 0 24 24" width="26" height="26" fill="#9da7b3"><path d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2zM8.5 13.5l2.5 3 3.5-4.5 4.5 6H5l3.5-4.5z"/></svg></div>
@@ -213,7 +227,7 @@ $('au-copy').addEventListener('click',function(){var t=$('au-n1').textContent+'=
   app.post("/users/profile/discord-unlink", logged, owner, verifyOrigin, async (req, res) => {
     await c.unlinkDiscord(req.me);
     req.session.flash = "Discord account unlinked.";
-    res.redirect(303, "/users/profile/edit");
+    res.redirect(303, "/users/profile");
   });
 
   // ---------- conversations ----------

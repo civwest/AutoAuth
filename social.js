@@ -29,7 +29,7 @@ const PROV = {
 };
 
 module.exports = function createSocial(h) {
-  const { pool, log, esc, origin, clip, save, limited, slugName, freeUsername, createAccount, start, authPage } = h;
+  const { ownerIdent, pool, log, esc, origin, clip, save, limited, slugName, freeUsername, createAccount, start, authPage } = h;
   const on = (k) => !!(process.env[PROV[k].id] && process.env[PROV[k].secret]);
   const redirectUri = (k) => `${origin()}/auth/${k}/callback`;
   const b64 = (b) => b.toString("base64url");
@@ -58,8 +58,9 @@ module.exports = function createSocial(h) {
       const k = req.params.provider, P = PROV[k];
       if (!P) return res.status(404).send("Not found");
       if (!on(k)) return res.status(503).send(authPage({ title: "Sign in", sub: `${P.label} sign-in is not set up yet`, error: "", top: "", form: "", foot: `<a class="alt" href="${req.session && req.session.acct ? `/dashboard/${req.session.acct.username}/profile` : "/login"}">Back</a>` }).replace('<div class="or"><span></span>or<span></span></div>', ""));
-      const intent = ["signup", "login", "link"].includes(req.query.intent) ? req.query.intent : "login";
+      const intent = ["signup", "login", "link", "olink"].includes(req.query.intent) ? req.query.intent : "login";
       if (intent === "link" && !(req.session && req.session.acct)) return res.redirect(303, "/login");
+      if (intent === "olink" && !(req.session && req.session.owner)) return res.redirect(303, "/login");
       if (limited("os:" + req.ip, 30, 600000)) return res.status(429).send("Too many attempts. Try again later.");
       const state = crypto.randomBytes(16).toString("hex"), verifier = b64(crypto.randomBytes(32));
       req.session.oa = { state, verifier, intent, provider: k, until: Date.now() + 10 * 60 * 1000 };
@@ -77,7 +78,7 @@ module.exports = function createSocial(h) {
       if (!P || !on(k)) return res.status(404).send("Not found");
       if (!o || o.provider !== k || o.until < Date.now() || typeof req.query.state !== "string" || req.query.state !== o.state) return fail(res, "This sign-in expired or was opened twice. Please try again.");
       delete req.session.oa; await save(req);
-      if (req.query.error) return res.redirect(303, o.intent === "link" && req.session.acct ? `/dashboard/${req.session.acct.username}/profile` : "/login");
+      if (req.query.error) return res.redirect(303, o.intent === "olink" ? "/users/profile" : o.intent === "link" && req.session.acct ? `/dashboard/${req.session.acct.username}/profile` : "/login");
       if (typeof req.query.code !== "string" || !req.query.code) return fail(res, `${P.label} did not return a code.`);
       try {
         const body = new URLSearchParams({ grant_type: "authorization_code", code: req.query.code, redirect_uri: redirectUri(k), code_verifier: o.verifier, client_id: process.env[P.id] });
@@ -86,6 +87,14 @@ module.exports = function createSocial(h) {
         const t = await (await fetch(P.token, { method: "POST", headers, body })).json();
         if (!t.access_token) { await log("account_social_failed", { provider: k, error: t.error }); return fail(res, `${P.label} rejected the sign-in.`); }
         const me = await P.me(t.access_token);
+        if (o.intent === "olink") {
+          const key = req.session.owner && ownerIdent.keyOf(req); if (!key) return res.redirect(303, "/login");
+          const okk = await ownerIdent.link(key, k, me.subject, clip(me.name, 80));
+          if (!okk) return fail(res, `That ${P.label} account is linked to another dashboard login.`, "/users/profile");
+          req.session.flash = `${P.label} linked.`; await save(req);
+          return res.redirect(303, "/users/profile");
+        }
+        if (o.intent === "login") { const ow = await ownerIdent.find(k, me.subject); if (ow) return res.redirect(303, await ownerIdent.login(req, ow, k)); }
         const found = (await pool.query("SELECT a.id,a.username FROM account_identities i JOIN accounts a ON a.id=i.account_id WHERE i.provider=$1 AND i.subject=$2", [k, me.subject])).rows[0];
         if (o.intent === "link") {
           const s = req.session.acct; if (!s) return res.redirect(303, "/login");

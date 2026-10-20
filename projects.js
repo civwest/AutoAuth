@@ -4,7 +4,7 @@ const crypto = require("node:crypto");
 
 const TYPES = {
   oauth: { label: "OAuth2 callback", path: "/oauth/callback",
-    fields: [["client_id", "Client ID"], ["client_secret", "Client secret", "secret"], ["message", "Success message"], ["redirect", "Redirect after success (https, optional)"], ["scopes", "Permissions to ask for", "scopes"], ["bot_token", "Bot token (only to add users to servers)", "secret_opt"], ["store", "Store users and tokens", "bool"]] },
+    fields: [["client_id", "Client ID"], ["client_secret", "Client secret", "secret"], ["message", "Success message"], ["redirect", "Redirect after success (https, optional)"], ["scopes", "Permissions to ask for", "scopes"], ["bot_token", "Bot token (only to add users to servers)", "secret_opt"], ["store", "Store users and tokens", "bool"], ["storage", "Where to store them", "storage"]] },
   interactions: { label: "Interactions endpoint", path: "/interactions",
     fields: [["public_key", "Public key"], ["reply", "Reply to commands"]] },
   webhook: { label: "Webhook events", path: "/webhook", fields: [["public_key", "Public key"]] },
@@ -154,7 +154,8 @@ module.exports = function createProjects({ pool, enc, dec, log, express, collect
       } else if (kind === "secret") {
         const v = str(i[k], 120);
         if (v) out[k + "_enc"] = enc(v); else if (old && old[k + "_enc"]) out[k + "_enc"] = old[k + "_enc"]; else throw new Error("Client secret is required.");
-      } else if (kind === "scopes") out[k] = [...new Set(String(i[k] ?? "").split(/[\s,]+/).filter((x) => SCOPE_KEYS.has(x)))].join(" ");
+      } else if (kind === "storage") out[k] = "database"; // Google Drive storage is under construction
+      else if (kind === "scopes") out[k] = [...new Set(String(i[k] ?? "").split(/[\s,]+/).filter((x) => SCOPE_KEYS.has(x)))].join(" ");
       else if (kind === "bool") out[k] = !!i[k];
       else out[k] = str(i[k], kind === "area" ? 20000 : 300);
     }
@@ -189,6 +190,7 @@ function spFields(){var t=SP.types[$('sp-type').value],box=$('sp-fields'),c=spEd
   if(f[2]==='scopes'){var sel=String(c[k]||'').split(' '),wrap=document.createElement('div');wrap.style.cssText='max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px';
    SP.scopes.forEach(function(s){var l=document.createElement('label'),cb=document.createElement('input');cb.type='checkbox';cb.value=s[0];cb.style.width='auto';cb.checked=sel.indexOf(s[0])>-1;cb.addEventListener('change',spNotes);l.style.cssText='display:flex;gap:8px;align-items:flex-start;margin:4px 0;font-weight:400';l.appendChild(cb);var tx=document.createElement('span');tx.textContent=s[0]+' - '+s[1]+(s[3]?' (needs Discord approval)':'');l.appendChild(tx);wrap.appendChild(l);});
    wrap.dataset.k=k;wrap.dataset.kind='scopes';box.appendChild(lab);box.appendChild(wrap);var nt=document.createElement('div');nt.id='sp-notes';nt.style.marginTop='10px';box.appendChild(nt);return;}
+  if(f[2]==='storage'){el=document.createElement('select');[['database','Database (encrypted)'],['drive','Google Drive (under construction)']].forEach(function(o){var op=document.createElement('option');op.value=o[0];op.textContent=o[1];if(o[0]==='drive')op.disabled=true;el.appendChild(op);});el.value='database';el.dataset.k=k;el.dataset.kind='storage';box.appendChild(lab);box.appendChild(el);return;}
   if(f[2]==='bool'){el=document.createElement('input');el.type='checkbox';el.style.width='auto';el.checked=!!c[k];lab.style.display='flex';lab.style.gap='8px';lab.style.alignItems='center';lab.insertBefore(el,lab.firstChild);box.appendChild(lab);}
   else{el=f[2]==='area'?document.createElement('textarea'):document.createElement('input');if(f[2]==='secret'||f[2]==='secret_opt'){el.type='password';el.autocomplete='new-password';el.placeholder=spEdit&&(f[2]==='secret'?spEdit.hasSecret:spEdit.hasBot)?'Saved. Leave blank to keep':'';}else el.value=c[k]||'';if(f[2]==='area')el.style.minHeight='140px';box.appendChild(lab);box.appendChild(el);}
   el.dataset.k=k;el.dataset.kind=f[2]||'';});spUrl();spNotes();}

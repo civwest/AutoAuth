@@ -141,7 +141,7 @@ ${reopen ? `document.addEventListener('DOMContentLoaded',function(){openAgree(${
   app.post("/users/profile/discord-link", verifyOrigin, (req, res) => {
     if (!req.session || !req.session.owner) return res.redirect(303, "/login");
     req.session.linkPending = Date.now() + 10 * 60 * 1000;
-    req.session.linkReturn = ["/dashboard/servers", "/users/profile/edit"].includes((req.body || {}).return) ? req.body.return : "/users/profile/edit";
+    req.session.linkReturn = ["/dashboard/servers", "/users/profile"].includes((req.body || {}).return) ? req.body.return : "/users/profile";
     req.session.save(() => res.set("Cache-Control", "no-store").redirect(303, discordUrl("link")));
   });
 

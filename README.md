@@ -2,6 +2,8 @@
 
 A Discord bot plus website and owner dashboard. People authorize on the website; server admins add them with `/addusers` or `/adduser`; owners manage everything from the dashboard. Hosted on Render with PostgreSQL.
 
+> **Only download files from the [Releases tab](../../releases).** Each release is a stable version. Downloading any other file from this repository is not recommended and is done at your own risk.
+
 See [UPDATES.md](UPDATES.md) for a description of every feature and recent change.
 
 ---
@@ -208,3 +210,12 @@ Applies only to account projects. A project is locked automatically when it adds
 - It appears under **Flags** on the admin Support tab (project name, owner, reason, reports). Admins can unlock it or keep it locked and mark it resolved. Admins never see the project's data.
 
 Tables added: `account_identities`, `project_data`, `project_flags`, `flag_reports`.
+
+## Under construction
+
+These parts are not built yet and show "Under construction" where they appear. They are removed from this list when the code is added.
+
+- **Google Drive storage** for project data (the storage option in the project dialog is disabled).
+- **Controls for these OAuth permissions** (each selected one gets its own tab that says Under construction): `guilds.members.read`, `bot`, `applications.commands`, `applications.commands.update`, `applications.commands.permissions.update`, `role_connections.write`, `openid`, `applications.entitlements`, and every permission Discord restricts (RPC, relationships, presences, activities, voice, lobbies, SDK, builds, store, messages, DM channels, group DMs).
+
+Built and working: Discord, Google and X sign-in, project accounts, project dashboards, Support chat, data tabs for `identify`, `email`, `connections`, `guilds`, `webhook.incoming` and `guilds.join`, abuse flagging, and account deletion.

@@ -92,6 +92,7 @@ async function schema() {
  CREATE TABLE IF NOT EXISTS project_data(slug TEXT NOT NULL, user_id TEXT NOT NULL, kind TEXT NOT NULL, data_enc TEXT NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(slug,user_id,kind));
  CREATE TABLE IF NOT EXISTS project_flags(id BIGSERIAL PRIMARY KEY, slug TEXT NOT NULL, account_id BIGINT, project_name TEXT, reason TEXT NOT NULL, affected INT NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'open', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  CREATE TABLE IF NOT EXISTS flag_reports(id BIGSERIAL PRIMARY KEY, flag_id BIGINT NOT NULL REFERENCES project_flags(id) ON DELETE CASCADE, contact TEXT, body TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ CREATE TABLE IF NOT EXISTS owner_identities(owner_key TEXT NOT NULL, provider TEXT NOT NULL, subject TEXT NOT NULL, name TEXT, linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(owner_key,provider), UNIQUE(provider,subject));
  CREATE TABLE IF NOT EXISTS account_identities(account_id BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, provider TEXT NOT NULL, subject TEXT NOT NULL, name TEXT, linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(provider,subject));
  CREATE INDEX IF NOT EXISTS account_identities_acct ON account_identities(account_id);
  ALTER TABLE side_projects ADD COLUMN IF NOT EXISTS owner_account BIGINT REFERENCES accounts(id) ON DELETE CASCADE;
@@ -296,7 +297,7 @@ async function dashDiscord(req,u,intent,t){
   }catch(e){ if(e.code==="23505") return {status:409,title:"Already linked",error:"That Discord account is already linked to another dashboard login."}; throw e; }
   await log("dashboard_discord_linked",{discord_id:u.id},owner.user);
   req.session.flash=`Discord account ${name} is now linked. You can sign in with Discord.`;
-  const ret=["/dashboard/servers","/users/profile/edit"].includes(req.session.linkReturn)?req.session.linkReturn:"/users/profile/edit"; delete req.session.linkReturn;
+  const ret=["/dashboard/servers","/users/profile"].includes(req.session.linkReturn)?req.session.linkReturn:"/users/profile"; delete req.session.linkReturn;
   return {redirect:ret};
  }
  const row=(await pool.query("SELECT owner_key FROM dashboard_discord WHERE discord_id=$1",[u.id])).rows[0];
@@ -310,9 +311,24 @@ async function dashDiscord(req,u,intent,t){
  await log("dashboard_login_success",{method:"discord",session_ttl_minutes:120,device_bound:true},owner.user);
  return {redirect:"/dashboard"};
 }
+// Google / X identities linked to dashboard (owner) logins.
+const ownerIdent={
+ keyOf:req=>{const o=owners.find(x=>x.user===(req.session&&req.session.owner));return o?o.key:null;},
+ async find(provider,subject){const r=(await pool.query("SELECT owner_key FROM owner_identities WHERE provider=$1 AND subject=$2",[provider,subject])).rows[0];return r?owners.find(o=>o.key===r.owner_key)||null:null;},
+ async list(key){return (await pool.query("SELECT provider,name FROM owner_identities WHERE owner_key=$1",[key])).rows;},
+ async link(key,provider,subject,name){try{await pool.query("INSERT INTO owner_identities(owner_key,provider,subject,name) VALUES($1,$2,$3,$4) ON CONFLICT(owner_key,provider) DO UPDATE SET subject=$3,name=$4,linked_at=NOW()",[key,provider,subject,name]);return true;}catch(e){if(e.code==="23505")return false;throw e;}},
+ async unlink(key,provider){await pool.query("DELETE FROM owner_identities WHERE owner_key=$1 AND provider=$2",[key,provider]);},
+ async login(req,owner,provider){
+  await new Promise((ok,no)=>req.session.regenerate(e=>e?no(e):ok()));
+  req.session.owner=owner.user;req.session.deviceFingerprint=deviceFingerprint(req);req.session.createdAt=Date.now();
+  await new Promise(ok=>req.session.save(ok));
+  await log("dashboard_login_success",{method:provider,session_ttl_minutes:120,device_bound:true},owner.user);
+  return "/dashboard";
+ }
+};
 const pdata=require("./pdata")({pool,enc,dec,log,express,esc,site,origin:()=>{try{return new URL(process.env.REDIRECT_URI).origin;}catch{return "";}}});
 const projects=require("./projects")({pool,enc,dec,log,express,collect:pdata.collect,dataScopes:pdata.DATA_SCOPES}); projects.mountPublic({app,site}); // /projects/<name>/... and /projects/<user>/<name>/...
-const accounts=require("./accounts")({pool,enc,dec,log,express,projects,pdata,site,esc,isOwnerName:u=>owners.some(o=>o.user.toLowerCase()===String(u).toLowerCase())}); accounts.mountPublic(app);
+const accounts=require("./accounts")({pool,enc,dec,log,express,projects,pdata,ownerIdent,site,esc,isOwnerName:u=>owners.some(o=>o.user.toLowerCase()===String(u).toLowerCase())}); accounts.mountPublic(app);
 require("./auth")(app,{site,pool,enc,log,equal,verifyOrigin,optOutUser,dashDiscord,accountDiscord:accounts.accountDiscord,accountLogin:accounts.accountLogin,loginRedirect:LOGIN_REDIRECT}); // /auth, /auth/start, /oauth/callback
 
 const DISCORD_PATH=require("./icons").discord;
@@ -336,7 +352,7 @@ app.post("/login",async(req,res)=>{
 app.post("/dashboard/logout",logged,async(req,res)=>{const owner=req.session.owner;await log("dashboard_logout",{},owner);req.session.destroy(()=>res.redirect("/"));});
 
 dash=require("./dashboard")({app,express,pool,client,esc,log,logged,verifyOrigin,displayActor,displayDetail,ActivityType,
-  core:{projects,accounts,linkedGuilds,unlinkDiscord,admins:owners,ADMIN_PERMS,OWNER_IDS,isExpired,addUserToGuild,addAllToGuild,kickFromGuild,optOutUser,sendDmTo,connectDiscord,discordState,shutdownBot}});
+  core:{projects,accounts,ownerIdent,linkedGuilds,unlinkDiscord,admins:owners,ADMIN_PERMS,OWNER_IDS,isExpired,addUserToGuild,addAllToGuild,kickFromGuild,optOutUser,sendDmTo,connectDiscord,discordState,shutdownBot}});
 
 // ---------- Discord events ----------
 const onInteraction=async i=>{

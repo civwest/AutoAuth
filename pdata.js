@@ -21,11 +21,15 @@ module.exports = function createPdata({ pool, enc, dec, log, express, esc, origi
   const scopesOf = (p) => String((p.config || {}).scopes || "").split(" ").filter(Boolean);
 
   // Tabs shown on a project's dashboard.
+  const BUILT = new Set(["identify", ...Object.values(DATA).map((x) => x.scope), "guilds.join"]);
   function tabsFor(p) {
-    if (p.type !== "oauth" || !(p.config || {}).store) return [];
+    if (p.type !== "oauth") return [];
     const sc = scopesOf(p), out = [];
-    for (const [k, d] of Object.entries(DATA)) if (sc.includes(d.scope)) out.push(["data/" + k, d.label]);
-    if (sc.includes("guilds.join")) out.push(["join", "Add to server"]);
+    if ((p.config || {}).store) {
+      for (const [k, d] of Object.entries(DATA)) if (sc.includes(d.scope)) out.push(["data/" + k, d.label]);
+      if (sc.includes("guilds.join")) out.push(["join", "Add to server"]);
+    }
+    for (const s of sc) if (!BUILT.has(s)) out.push(["perm/" + s, s]); // controls for these permissions are under construction
     return out;
   }
 
@@ -89,8 +93,15 @@ module.exports = function createPdata({ pool, enc, dec, log, express, esc, origi
     return f.id;
   }
 
-  function mount({ app, acctOnly, verifyOrigin, page, sub, own, json, sendDm }) {
+  function mount({ app, acctOnly, verifyOrigin, page, sub, own, json, sendDm, scopeInfo }) {
     const base = (a, p) => `/dashboard/${a.username}/${p.slug.slice(a.username.length + 1)}`;
+
+    app.get("/dashboard/:u/:name/perm/:scope", acctOnly, async (req, res) => {
+      const a = req.acct, p = await own(a, req.params.name); if (!p) return res.status(404).send("Not found");
+      const s = (scopeInfo || []).find((x) => x[0] === req.params.scope);
+      if (!s || !scopesOf(p).includes(s[0]) || BUILT.has(s[0])) return res.status(404).send("Not found");
+      page(req, res, "projects", sub(a, p, "perm/" + s[0]) + `<div class="card"><h2>${esc(s[0])}</h2><p>${esc(s[1])}</p><p><b>Under construction.</b> The controls for this permission are not built yet.</p></div>`);
+    });
 
     app.get("/dashboard/:u/:name/data/:kind", acctOnly, async (req, res) => {
       const a = req.acct, p = await own(a, req.params.name); if (!p) return res.status(404).send("Not found");

@@ -197,3 +197,13 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 ## v1.5.6
 - Discord, Google and X buttons are now the same size on login, signup and profile.
 - Profile shows Link buttons for Discord, Google and X, and Unlink buttons for each linked account. Google and X show even before their credentials are set; the button then explains the provider is not set up.
+
+## v1.5.7
+- Fixed the DM Users tab (and Users, Logs, Servers) being sent to the signup page.
+- Connect/Unlink buttons for Discord, Google and X are on the main dashboard profile page; Google and X can also be used to log in to the dashboard once linked.
+- README: use releases only; other files at your own risk.
+
+## v1.5.8
+- Removed the GitHub release check. Features are live when built; anything not built yet says "Under construction".
+- Every selected OAuth permission without finished controls gets its own tab that says Under construction. The Google Drive storage option is shown disabled.
+- Support tab on account dashboards shows an unread count.

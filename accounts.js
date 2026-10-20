@@ -15,7 +15,7 @@ const SETUP = {
   invite: (u) => [`Share <code>${u}</code>. It sends people to Discord's authorize page for your bot.`],
 };
 
-module.exports = function createAccounts({ pool, enc, dec, log, express, projects, pdata, site, esc, isOwnerName = () => false }) {
+module.exports = function createAccounts({ pool, enc, dec, log, express, projects, pdata, ownerIdent, site, esc, isOwnerName = () => false }) {
   const fp = (req) => crypto.createHash("sha256").update(String(req.get("user-agent") || "unknown")).digest("hex");
   const origin = () => { try { return new URL(process.env.REDIRECT_URI).origin; } catch { return ""; } };
   const hits = new Map();
@@ -87,7 +87,7 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
     return checkPw(pw, r.password_hash) ? r : null;
   }
 
-  const social = require("./social")({ pool, log, esc, origin, clip, save, limited, slugName, freeUsername, createAccount, start, authPage });
+  const social = require("./social")({ ownerIdent, pool, log, esc, origin, clip, save, limited, slugName, freeUsername, createAccount, start, authPage });
   const socialButtons = (intent) => social.buttons(intent);
 
   function mountPublic(app) {
@@ -115,22 +115,24 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
 
   // ---------- helpers for dashboards ----------
   const acctOnly = async (req, res, next) => {
+    if (RESERVED.has(req.params.u)) return next("route"); // /dashboard/dm, /dashboard/users... belong to the main dashboard
     const s = req.session && req.session.acct;
     if (!s) return res.redirect(303, "/signup");
     if (req.session.acctFp !== fp(req)) return req.session.destroy(() => res.redirect(303, "/signup"));
     if (req.params.u && req.params.u !== s.username) return res.redirect(303, "/dashboard/" + s.username);
     const a = (await pool.query("SELECT id,username,display_name,discord_name,avatar FROM accounts WHERE id=$1", [s.id])).rows[0];
     if (!a) return req.session.destroy(() => res.redirect(303, "/signup"));
+    req.unread = (await pool.query("SELECT COUNT(*)::int n FROM support_messages WHERE account_id=$1 AND from_admin AND NOT read_user", [a.id])).rows[0].n;
     req.acct = a; next();
   };
 
   function mountDash({ app, renderFor, verifyOrigin, sendDm }) {
     const json = express.json({ limit: "100kb" });
-    const nav = (a, tab) => {
+    const nav = (a, tab, unread) => {
       const l = (k, h, t) => `<a class="${tab === k ? "on" : ""}" href="${h}">${t}</a>`;
-      return l("projects", `/dashboard/${a.username}`, "Projects") + l("support", `/dashboard/${a.username}/support`, "Support") + l("profile", `/dashboard/${a.username}/profile`, "Profile");
+      return l("projects", `/dashboard/${a.username}`, "Projects") + l("support", `/dashboard/${a.username}/support`, "Support" + (unread ? ` (${unread})` : "")) + l("profile", `/dashboard/${a.username}/profile`, "Profile");
     };
-    const page = (req, res, tab, content) => renderFor(req, res, tab, content, { nav: nav(req.acct, tab), who: req.acct.username, whoHref: `/dashboard/${req.acct.username}/profile`, logout: "/account/logout" });
+    const page = (req, res, tab, content) => renderFor(req, res, tab, content, { nav: nav(req.acct, tab, tab === "support" ? 0 : req.unread), who: req.acct.username, whoHref: `/dashboard/${req.acct.username}/profile`, logout: "/account/logout" });
     const full = (a, name) => `${a.username}/${name}`;
     const own = async (a, name) => (await pool.query("SELECT slug,name,type,config,locked FROM side_projects WHERE slug=$1 AND owner_account=$2", [full(a, String(name)), a.id])).rows[0];
     const short = (a, p) => ({ ...p, slug: p.slug.slice(a.username.length + 1) });
@@ -207,7 +209,7 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
       page(req, res, "projects", sub(a, p, "logs") + `<div class="card"><div class="wrap"><table class="stack"><tr><th>Time (UTC)</th><th>Event</th><th>Details</th></tr>${r.map((x) => `<tr><td data-l="Time">${esc(new Date(x.created_at).toISOString().slice(0, 19).replace("T", " "))}</td><td data-l="Event">${esc(x.event_type)}</td><td data-l="Details"><code style="word-break:break-all">${esc(JSON.stringify(x.detail))}</code></td></tr>`).join("") || '<tr><td colspan="3">No events yet.</td></tr>'}</table></div></div>`);
     });
 
-    pdata.mount({ app, acctOnly, verifyOrigin, page, sub, own, json, sendDm });
+    pdata.mount({ app, acctOnly, verifyOrigin, page, sub, own, json, sendDm, scopeInfo: projects.SCOPES });
 
     // support chat
     app.get("/dashboard/:u/support", acctOnly, async (req, res) => {
@@ -331,5 +333,5 @@ poll();setInterval(poll,4000);})();`;
   // Signed-in accounts that open /dashboard land on their own dashboard.
   const landing = (req) => (req.session && req.session.acct && !req.session.owner ? "/dashboard/" + req.session.acct.username : null);
 
-  return { socialButtons, accountDiscord, accountLogin, passwordLogin, start, authPage, discordLink, mountPublic, mountDash, mountAdmin, landing };
+  return { social, socialButtons, accountDiscord, accountLogin, passwordLogin, start, authPage, discordLink, mountPublic, mountDash, mountAdmin, landing };
 };
