@@ -213,9 +213,11 @@ Tables added: `account_identities`, `project_data`, `project_flags`, `flag_repor
 
 ## Under construction
 
+The home page shows this list in a notice at the top. The contact email in the footer defaults to `support@` plus your domain; set `SUPPORT_EMAIL` to change it. When the bot is not connected to Discord, every public page shows an Offline banner at the top.
+
 These parts are not built yet and show "Under construction" where they appear. They are removed from this list when the code is added.
 
-- **Google Drive storage** for project data (the storage option in the project dialog is disabled).
+- **Google Drive storage** for project data (the storage option in the project dialog is disabled). It will need a Google OAuth client with the Drive API enabled.
 - **Controls for these OAuth permissions** (each selected one gets its own tab that says Under construction): `guilds.members.read`, `bot`, `applications.commands`, `applications.commands.update`, `applications.commands.permissions.update`, `role_connections.write`, `openid`, `applications.entitlements`, and every permission Discord restricts (RPC, relationships, presences, activities, voice, lobbies, SDK, builds, store, messages, DM channels, group DMs).
 
 Built and working: Discord, Google and X sign-in, project accounts, project dashboards, Support chat, data tabs for `identify`, `email`, `connections`, `guilds`, `webhook.incoming` and `guilds.join`, abuse flagging, and account deletion.

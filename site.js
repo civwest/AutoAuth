@@ -60,7 +60,7 @@ details{border-bottom:1px solid #e5e5e5;padding:12px 0}summary{cursor:pointer;fo
 .authopt{font:inherit;text-align:left;cursor:pointer;background:#fff;border:1px solid #d4d4d8;border-radius:16px;padding:20px;transition:box-shadow .15s,transform .15s,border-color .15s}
 .authopt:hover{box-shadow:0 8px 24px rgba(0,0,0,.12);transform:translateY(-2px);border-color:#000}
 .authopt b{display:block;font-size:18px;margin-bottom:6px;color:#111}.authopt span{color:#555;font-size:14px;line-height:1.45;display:block}
-.banner{border-radius:10px;padding:12px 14px;margin:16px 0;background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
+.notice{border-radius:10px;padding:12px 14px;margin:0 0 16px;background:#fffbeb;color:#92400e;border:1px solid #fde68a}.banner{border-radius:10px;padding:12px 14px;margin:16px 0;background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
 dialog.dlg{border:0;border-radius:18px;padding:26px;width:min(560px,92vw);max-height:88vh;overflow:auto;color:#1a1a1a;box-shadow:0 30px 80px rgba(0,0,0,.45)}
 dialog.dlg::backdrop{background:rgba(0,0,0,.6)}
 dialog.dlg h2{margin:0 0 8px;font-size:22px}
@@ -98,6 +98,16 @@ document.addEventListener('click',function(e){var a=e.target.closest&&e.target.c
 function goExternal(){window.open(extUrl,'_blank','noopener,noreferrer');closeDlg('leave');}
 `;
 
+let probe = () => ({ offline: false });
+const SUPPORT_EMAIL = (() => { const e = String(process.env.SUPPORT_EMAIL || "").trim(); if (/^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/.test(e)) return e; try { return "support@" + new URL(process.env.REDIRECT_URI).hostname.replace(/^www\./, ""); } catch { return ""; } })();
+const UNDER_CONSTRUCTION = "Google Drive storage and the controls for some project permissions";
+function notices(active) {
+  let out = "";
+  if (probe().offline) out += `<div class="banner" role="status" style="margin-top:0"><b>Offline.</b> The bot is not running right now.</div>`;
+  if (active === "home") out += `<div class="notice"><b>Under construction:</b> ${UNDER_CONSTRUCTION} are not built yet.</div>`;
+  return out;
+}
+
 function layout({ title, active, gap = "72vh", body }) {
   const nav = (href, label, key) =>
     `<a class="tab${active === key ? " on" : ""}" href="${href}">${label}</a>`;
@@ -116,7 +126,7 @@ ${/^[\w-]{20,100}$/.test(process.env.GOOGLE_SITE_VERIFICATION || "") ? `<meta na
 <a href="/" aria-label="AutoAuth home"><img class="logo" src="/assets/icon.webp" alt="AutoAuth"></a></div>
 </header>
 <div class="spacer" style="--gap:${gap}"></div>
-<main class="panel"><div class="in">${body}</div></main>
+<main class="panel"><div class="in">${notices(active)}${body}</div></main>
 <dialog class="dlg" id="leave"><h2>You're leaving the site</h2>
 <p>This link leads to an external website. Are you sure you want to open it?</p>
 <div class="btns"><button type="button" class="btn green" onclick="goExternal()">Yes, do it!</button><button type="button" class="btn blue" onclick="closeDlg('leave')">No, I want to stay.</button></div></dialog>
@@ -141,6 +151,7 @@ ${LINKS.x ? `<a href="${LINKS.x}" target="_blank" rel="noopener" title="X" aria-
 ${LINKS.twitch ? `<a href="${LINKS.twitch}" target="_blank" rel="noopener" title="Twitch" aria-label="Twitch">${svg("twitch", "Twitch")}</a>` : ""}
 ${LINKS.discord ? `<a href="${LINKS.discord}" target="_blank" rel="noopener" title="Join the Discord" aria-label="Join the Discord">${svg("discord", "Join the Discord")}</a>` : ""}
 </div>
+${SUPPORT_EMAIL ? `<p style="margin:14px 0 0"><a href="mailto:${SUPPORT_EMAIL}" style="color:#fff;text-decoration:underline">${SUPPORT_EMAIL}</a></p>` : ""}
 <div class="legal"><a href="/terms-of-service">Terms of Service</a><a href="/privacy-policy">Privacy Policy</a></div>
 </div></footer><script>${CLIENT_JS}</script></body></html>`;
 }
@@ -255,7 +266,7 @@ const privacyBody = `
 <p>We may update this policy and will change the date above when we do.</p>
 
 <h2>10. Contact</h2>
-<p>Questions or requests: join the ${ext(LINKS.discord, "Discord server")}.</p>`;
+<p>Questions or requests: join the ${ext(LINKS.discord, "Discord server")}${SUPPORT_EMAIL ? ` or email <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>` : ""}.</p>`;
 
 const tosBody = `
 <h1>Terms of Service</h1>
@@ -282,9 +293,10 @@ const tosBody = `
 <h2>8. Changes</h2>
 <p>We may update these terms and will change the date above when we do.</p>
 <h2>9. Contact</h2>
-<p>Questions: join the ${ext(LINKS.discord, "Discord server")}.</p>`;
+<p>Questions: join the ${ext(LINKS.discord, "Discord server")}${SUPPORT_EMAIL ? ` or email <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>` : ""}.</p>`;
 
 module.exports = function mountSite(app, client, getStats, getState) {
+  probe = () => ({ offline: !client.isReady() });
   const page = (title, body, active) => layout({ title: title + " | AutoAuth", active, gap: "20vh", body });
 
   // Images are served from ./public.

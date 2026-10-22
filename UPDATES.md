@@ -207,3 +207,8 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 - Removed the GitHub release check. Features are live when built; anything not built yet says "Under construction".
 - Every selected OAuth permission without finished controls gets its own tab that says Under construction. The Google Drive storage option is shown disabled.
 - Support tab on account dashboards shows an unread count.
+
+## v1.5.9
+- Footer shows the contact email (support@ your domain, or SUPPORT_EMAIL).
+- Public pages show an Offline banner at the top when the bot is not connected.
+- The home page shows an Under construction notice for features that are not built yet.
