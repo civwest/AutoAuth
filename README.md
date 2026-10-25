@@ -211,12 +211,41 @@ Applies only to account projects. A project is locked automatically when it adds
 
 Tables added: `account_identities`, `project_data`, `project_flags`, `flag_reports`.
 
+
+## Security
+
+Built in, with nothing to turn on:
+
+- **Rate limiter** (per IP, in memory): 240 requests/min overall, 20/min on login, sign-up and OAuth pages, 90/min for POST requests, 600/min for Discord interaction and webhook endpoints. Over the limit returns 429 with `Retry-After`. An IP that hits a limit 5 times in 10 minutes is blocked for 15 minutes and the block is logged (`security_ip_blocked`). Static images and `/health` are not counted.
+- **Login protection**: 8 failed logins per IP, or 5 for one username from one IP, lock that login for 15 minutes. Passwords are hashed with scrypt. Common and guessable account passwords are rejected.
+- **Two-step login (TOTP)** for dashboard logins: open your profile, press Set up under Two-step login, scan or enter the secret in an authenticator app, and add the shown variable (`DASHBOARD_ADMINn_TOTP_SECRET`, or `DASHBOARD_OWNERn_TOTP_SECRET`) in Render. Each code works once. The login page has a Code field for it.
+- **Headers**: Content-Security-Policy, X-Frame-Options (no framing), nosniff, HSTS, Referrer-Policy, Permissions-Policy and Cross-Origin-Opener-Policy. Private pages are sent with `Cache-Control: no-store`.
+- **Host check**: requests for any other host name get 421. Your domain from `REDIRECT_URI` (and `www.`), `localhost` and `*.onrender.com` are allowed. Add more with `ALLOWED_HOSTS` (comma separated).
+- **Cross-site POST blocking**: browsers' `Sec-Fetch-Site` and `Origin` are checked on every form and API post.
+- **Discord signatures**: interaction and webhook endpoints verify Discord's Ed25519 signature and reject requests older than 5 minutes.
+- **Webhook addresses** stored from OAuth must be Discord's own before the server will call them.
+- **Slow-request protection** (header, request and keep-alive timeouts), URL length limit, request size limits.
+- **Data**: tokens and project data are AES-256-GCM encrypted with `TOKEN_ENCRYPTION_KEY`; accounts and the dashboard use bound, expiring sessions; `/.well-known/security.txt` lists your contact email.
+- Startup warns about a short `SESSION_SECRET` or a placeholder `TOKEN_ENCRYPTION_KEY`.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `RATE_LIMIT_PER_MIN` | 240 | Requests per IP per minute |
+| `RATE_LIMIT_AUTH_PER_MIN` | 20 | Login, sign-up and OAuth pages |
+| `RATE_LIMIT_WRITE_PER_MIN` | 90 | POST/PUT/DELETE requests |
+| `RATE_LIMIT_HOOK_PER_MIN` | 600 | Discord interaction/webhook endpoints |
+| `ALLOWED_HOSTS` | | Extra allowed host names, or `*` to turn the host check off |
+| `DASHBOARD_ADMINn_TOTP_SECRET` | | Two-step login secret for that dashboard login |
+
+The rate limiter keeps its counts in memory, so they reset when the service restarts and are not shared if you run more than one instance. Two-step login for project accounts is under construction.
+
 ## Under construction
 
 The home page shows this list in a notice at the top. The contact email in the footer defaults to `support@` plus your domain; set `SUPPORT_EMAIL` to change it. When the bot is not connected to Discord, every public page shows an Offline banner at the top.
 
 These parts are not built yet and show "Under construction" where they appear. They are removed from this list when the code is added.
 
+- **Two-step login for project accounts** (dashboard logins already have it).
 - **Google Drive storage** for project data (the storage option in the project dialog is disabled). It will need a Google OAuth client with the Drive API enabled.
 - **Controls for these OAuth permissions** (each selected one gets its own tab that says Under construction): `guilds.members.read`, `bot`, `applications.commands`, `applications.commands.update`, `applications.commands.permissions.update`, `role_connections.write`, `openid`, `applications.entitlements`, and every permission Discord restricts (RPC, relationships, presences, activities, voice, lobbies, SDK, builds, store, messages, DM channels, group DMs).
 

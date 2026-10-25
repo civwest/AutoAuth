@@ -30,6 +30,7 @@ const PROV = {
 
 module.exports = function createSocial(h) {
   const { ownerIdent, pool, log, esc, origin, clip, save, limited, slugName, freeUsername, createAccount, start, authPage } = h;
+  const shown = (k, me) => (k === "x" && me.handle ? "@" + me.handle : me.name); // how a connected account is labelled
   const on = (k) => !!(process.env[PROV[k].id] && process.env[PROV[k].secret]);
   const redirectUri = (k) => `${origin()}/auth/${k}/callback`;
   const b64 = (b) => b.toString("base64url");
@@ -89,7 +90,7 @@ module.exports = function createSocial(h) {
         const me = await P.me(t.access_token);
         if (o.intent === "olink") {
           const key = req.session.owner && ownerIdent.keyOf(req); if (!key) return res.redirect(303, "/login");
-          const okk = await ownerIdent.link(key, k, me.subject, clip(me.name, 80));
+          const okk = await ownerIdent.link(key, k, me.subject, clip(shown(k, me), 80));
           if (!okk) return fail(res, `That ${P.label} account is linked to another dashboard login.`, "/users/profile");
           req.session.flash = `${P.label} linked.`; await save(req);
           return res.redirect(303, "/users/profile");
@@ -99,7 +100,7 @@ module.exports = function createSocial(h) {
         if (o.intent === "link") {
           const s = req.session.acct; if (!s) return res.redirect(303, "/login");
           if (found && String(found.id) !== s.id) return fail(res, `That ${P.label} account is linked to another account.`, `/dashboard/${s.username}/profile`);
-          await pool.query("INSERT INTO account_identities(account_id,provider,subject,name) VALUES($1,$2,$3,$4) ON CONFLICT(provider,subject) DO UPDATE SET name=$4", [s.id, k, me.subject, clip(me.name, 80)]);
+          await pool.query("INSERT INTO account_identities(account_id,provider,subject,name) VALUES($1,$2,$3,$4) ON CONFLICT(provider,subject) DO UPDATE SET name=$4", [s.id, k, me.subject, clip(shown(k, me), 80)]);
           req.session.flash = `${P.label} linked.`; await save(req);
           return res.redirect(303, `/dashboard/${s.username}/profile`);
         }
@@ -107,7 +108,7 @@ module.exports = function createSocial(h) {
         if (o.intent === "login") return fail(res, `There is no account for this ${P.label} user yet.`, "/signup");
         const name = clip(me.name || me.handle, 60) || k;
         const acct = await createAccount({ username: await freeUsername(slugName(me.handle || me.name)), name });
-        await pool.query("INSERT INTO account_identities(account_id,provider,subject,name) VALUES($1,$2,$3,$4)", [acct.id, k, me.subject, clip(me.name, 80)]);
+        await pool.query("INSERT INTO account_identities(account_id,provider,subject,name) VALUES($1,$2,$3,$4)", [acct.id, k, me.subject, clip(shown(k, me), 80)]);
         const out = await start(req, acct); res.redirect(303, out.redirect);
       } catch (e) { console.error(e); await log("account_social_error", { provider: k, error: e.message }); fail(res, "Something went wrong. Please try again."); }
     });

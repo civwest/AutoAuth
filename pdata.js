@@ -9,6 +9,9 @@ const DATA = {
   guilds: { scope: "guilds", label: "Servers", cols: ["User", "Servers", "Names"] },
   webhook: { scope: "webhook.incoming", label: "Webhooks", cols: ["User", "Channel ID", "Server ID"] },
 };
+const HOOK_URL = /^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/api\/(?:v\d+\/)?webhooks\/\d{5,25}\/[\w-]{20,200}$/; // only real Discord webhooks are ever called
+// Webhook URLs must be Discord's own, so the server can never be made to call somewhere else.
+const DISCORD_HOOK = /^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/\d{17,20}\/[\w-]+$/;
 const DATA_SCOPES = new Set([...Object.values(DATA).map((d) => d.scope), "guilds.join"]);
 const LIMITS = () => ({ guilds: Number(process.env.FLAG_GUILDS_24H) || 30, members: Number(process.env.FLAG_MEMBERS_1H) || 100 });
 
@@ -41,7 +44,7 @@ module.exports = function createPdata({ pool, enc, dec, log, express, esc, origi
       if (sc.includes("email") && u.email) await put("email", { email: u.email, verified: !!u.verified });
       if (sc.includes("connections")) { const l = await get("/users/@me/connections"); if (Array.isArray(l)) await put("connections", l.map((x) => ({ type: x.type, name: x.name, verified: !!x.verified }))); }
       if (sc.includes("guilds")) { const l = await get("/users/@me/guilds"); if (Array.isArray(l)) await put("guilds", l.map((g) => ({ id: g.id, name: g.name, owner: !!g.owner }))); }
-      if (t.webhook && t.webhook.url) await put("webhook", { id: t.webhook.id, channel_id: t.webhook.channel_id, guild_id: t.webhook.guild_id, url: t.webhook.url });
+      if (t.webhook && HOOK_URL.test(String(t.webhook.url || ""))) await put("webhook", { id: t.webhook.id, channel_id: t.webhook.channel_id, guild_id: t.webhook.guild_id, url: t.webhook.url });
     } catch (e) { console.error("project data", e.message); }
   }
 
@@ -117,6 +120,8 @@ module.exports = function createPdata({ pool, enc, dec, log, express, esc, origi
       if (limited("wh:" + a.id, 30)) return res.status(429).json({ error: "Slow down." });
       const text = clip((req.body || {}).text, 2000); if (!text) return res.status(400).json({ error: "Write a message first." });
       const r = (await rowsFor(p.slug, "webhook")).find((x) => x.id === String((req.body || {}).user)); if (!r || !r.data) return res.status(404).json({ error: "No webhook for that user." });
+      if (!HOOK_URL.test(String(r.data.url || ""))) return res.status(400).json({ error: "That webhook is not a Discord webhook." });
+      if (!DISCORD_HOOK.test(String(r.data.url))) return res.status(400).json({ error: "That webhook address is not valid." });
       const out = await fetch(r.data.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: text, allowed_mentions: { parse: [] } }) });
       if (!out.ok) return res.status(502).json({ error: "Discord rejected the message (" + out.status + ")." });
       await pool.query("INSERT INTO project_logs(slug,event_type,detail) VALUES($1,'webhook_sent','{}')", [p.slug]);

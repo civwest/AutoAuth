@@ -1,6 +1,7 @@
 "use strict";
 // Signed-up accounts: Discord sign-up/login, a dashboard per account at /dashboard/<username>, per-project dashboards and support chat.
 const crypto = require("node:crypto");
+const { weakPassword } = require("./security");
 
 const RESERVED = new Set(["users", "servers", "dm", "logs", "projects", "support", "messages", "discord", "database", "presence", "shutdown", "restart", "roles", "admin", "login", "logout", "signup", "account", "api", "oauth", "auth", "channels", "profile", "static", "public"]);
 const NAME = /^[a-z0-9](?:[a-z0-9-]{1,18}[a-z0-9])$/;
@@ -95,16 +96,17 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
     pdata.mountPublic(app);
     app.get("/signup", (req, res) => {
       if (req.session && req.session.acct) return res.redirect(303, "/dashboard/" + req.session.acct.username);
-      const e = { taken: "That username is taken.", name: "Use 3 to 20 letters, numbers or dashes.", pw: "Use a password of at least 8 characters.", rate: "Too many attempts. Try again later." }[req.query.e] || "";
+      const e = { taken: "That username is taken.", name: "Use 3 to 20 letters, numbers or dashes.", pw: "Use a stronger password of at least 8 characters.", rate: "Too many attempts. Try again later." }[req.query.e] || "";
       res.set("Cache-Control", "no-store").send(authPage({ title: "AutoAuth Sign up", sub: "Create an account", error: e, top: discordPost("signup", "Sign up with Discord") + socialButtons("signup"),
-        form: `<form method="post" action="/signup"><label>Username</label><input name="username" maxlength="20" autocomplete="username" required><label>Password</label><input type="password" name="password" minlength="8" autocomplete="new-password" required><button class="go">Create account</button></form>`,
+        form: `<form method="post" action="/signup"><label>Username</label><input name="username" maxlength="20" autocomplete="username" required><label>Password</label><input type="password" name="password" minlength="8" autocomplete="new-password" required><input name="hp_field" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0"><button class="go">Create account</button></form>`,
         foot: `<p class="muted">Already have an account? <a href="/login" style="color:#9db4ff">Log in</a></p><p class="muted">Project data is encrypted. AutoAuth's admins cannot read it or open your dashboard.</p>` }));
     });
     app.post("/signup", async (req, res) => {
       if (limited("sp:" + req.ip, 10, 600000)) return res.redirect(303, "/signup?e=rate");
       const u = clip((req.body || {}).username, 20).toLowerCase(), pw = String((req.body || {}).password || "");
       if (!NAME.test(u) || RESERVED.has(u) || isOwnerName(u)) return res.redirect(303, "/signup?e=name");
-      if (pw.length < 8 || pw.length > 200) return res.redirect(303, "/signup?e=pw");
+      if ((req.body || {}).hp_field) return res.redirect(303, "/signup?e=rate"); // hidden field only bots fill in
+      if (pw.length < 8 || pw.length > 200 || weakPassword(pw, u)) return res.redirect(303, "/signup?e=pw");
       try {
         const acct = await createAccount({ username: u, name: u, passwordHash: hashPw(pw) });
         const out = await start(req, acct); res.redirect(303, out.redirect);
@@ -256,7 +258,7 @@ ${row("Discord", a.discord_name, lnk(social.btn("discord", "Link Discord", { pos
       const r = (await pool.query("SELECT password_hash FROM accounts WHERE id=$1", [req.acct.id])).rows[0], pw = String(req.body.password || "");
       if (limited("pw:" + req.acct.id, 10, 600000)) return res.redirect(303, back(req, "Too many attempts."));
       if (r && r.password_hash && !checkPw(String(req.body.current || ""), r.password_hash)) return res.redirect(303, back(req, "Current password is wrong."));
-      if (pw.length < 8 || pw.length > 200) return res.redirect(303, back(req, "Use a password of at least 8 characters."));
+      if (pw.length < 8 || pw.length > 200 || weakPassword(pw, req.acct.username)) return res.redirect(303, back(req, "Use a stronger password of at least 8 characters."));
       await pool.query("UPDATE accounts SET password_hash=$2 WHERE id=$1", [req.acct.id, hashPw(pw)]);
       res.redirect(303, back(req, "Password saved."));
     });

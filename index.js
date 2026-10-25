@@ -9,6 +9,8 @@ const required = ["BOT_TOKEN","CLIENT_ID","CLIENT_SECRET","REDIRECT_URI","DATABA
 for (const k of required) if (!process.env[k]) { console.error("Missing Render environment variable:", k); process.exit(1); }
 // Dashboard logins: DASHBOARD_ADMIN1_USER / DASHBOARD_ADMIN1_PASSWORD_HASH ... up to ADMIN9. The older DASHBOARD_OWNERn_* names still work.
 const adminEnv = (n, k) => process.env[`DASHBOARD_ADMIN${n}_${k}`] || process.env[`DASHBOARD_OWNER${n}_${k}`] || "";
+if (String(process.env.SESSION_SECRET).length < 32) console.warn("SESSION_SECRET is short. Use at least 32 random characters.");
+if (/^(.)\1+$/.test(process.env.TOKEN_ENCRYPTION_KEY)) console.warn("TOKEN_ENCRYPTION_KEY looks like a placeholder. Generate a random 64 character hex value.");
 const key = Buffer.from(process.env.TOKEN_ENCRYPTION_KEY, "hex");
 if (key.length !== 32) { console.error("TOKEN_ENCRYPTION_KEY must be 64 hex characters."); process.exit(1); }
 
@@ -16,6 +18,8 @@ const app = express(), port = Number(process.env.PORT) || 10000;
 const pool = new Pool({ connectionString:process.env.DATABASE_URL, ssl:process.env.DATABASE_SSL==="disable" ? false : {rejectUnauthorized:false} });
 const PgSession = require("connect-pg-simple")(session);
 app.set("trust proxy", 1);
+const {createSecurity,totpVerify}=require("./security");
+const security=createSecurity({log}); security.mount(app); // rate limiter, headers, host check, cross-site POST block
 app.use(express.urlencoded({ extended: false, limit: "20kb" }));
 app.use(session({ name:"autoauth.sid", secret:process.env.SESSION_SECRET, resave:false, saveUninitialized:false, rolling:false,
   store:new PgSession({ pool, tableName:"dashboard_sessions", createTableIfMissing:true, ttl:2*60*60 }),
@@ -43,7 +47,7 @@ for (let n=1;n<=9;n++) {
  const isOwner=!process.env[`DASHBOARD_ADMIN${n}_USER`]&&!!process.env[`DASHBOARD_OWNER${n}_USER`];
  const raw=adminEnv(n,"PERMISSIONS").trim().toLowerCase();
  const perms=new Set(raw==="all"||(!raw&&isOwner)?ADMIN_PERMS:raw.split(/[ ,]+/).filter(p=>ADMIN_PERMS.includes(p)));
- owners.push({key:String(n),user,hash,perms});
+ owners.push({key:String(n),user,hash,perms,totp:adminEnv(n,"TOTP_SECRET").replace(/\s/g,"")});
 }
 if(!owners.length) console.warn("No dashboard logins are set (DASHBOARD_ADMINn_USER / _PASSWORD_HASH), so nobody can sign in to the dashboard.");
 const attempts = new Map();
@@ -338,16 +342,25 @@ app.get("/login",(req,res)=>{
  if(req.session.owner)return res.redirect(safeNext(req.query.next)||"/dashboard");
  if(req.session.acct)return res.redirect(303,"/dashboard/"+req.session.acct.username);
  res.send(accounts.authPage({title:"AutoAuth Login",sub:"Log in",error:req.query.error?"Login failed. Check username and password.":"",top:accounts.discordLink(discordLoginUrl(),"Log in with Discord")+accounts.socialButtons("login"),
-  form:`<form method="post"><input type="hidden" name="next" value="${esc(safeNext(req.query.next))}"><label>Username</label><input name="username" autocomplete="username" required><label>Password</label><input type="password" name="password" autocomplete="current-password" required><button class="go">Log in</button></form>`,
+  form:`<form method="post"><input type="hidden" name="next" value="${esc(safeNext(req.query.next))}"><label>Username</label><input name="username" autocomplete="username" required><label>Password</label><input type="password" name="password" autocomplete="current-password" required><label>Code (if 2FA is on)</label><input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="8"><button class="go">Log in</button></form>`,
   foot:`<p class="muted" style="margin-bottom:0">Don't have an account? Create one.</p><a class="alt" href="/signup">Create an account</a>`}));
 });
 app.post("/login",async(req,res)=>{
  const ip=req.ip||"unknown", a=attempts.get(ip)||{n:0,until:0};
  if(a.until>Date.now())return res.status(429).send("Too many login attempts. Try again later.");
- const user=String(req.body.username||""),pw=String(req.body.password||"");
- const owner=owners.find(o=>equal(o.user.toLowerCase(),user.trim().toLowerCase())&&verify(pw,o.hash)); // usernames are not case sensitive
- if(!owner){const acct=await accounts.passwordLogin(user,pw);if(acct){attempts.delete(ip);const out=await accounts.start(req,acct);return res.redirect(303,out.redirect);}a.n++;if(a.n>=8){a.n=0;a.until=Date.now()+15*60*1000;}attempts.set(ip,a);await log("dashboard_login_failed",{username:user.slice(0,80),ip});return res.redirect(303,"/login?error=1"+(safeNext(req.body.next)?"&next="+encodeURIComponent(safeNext(req.body.next)):""));}
- attempts.delete(ip);req.session.regenerate(async err=>{if(err)return res.status(500).send("Session error");req.session.owner=owner.user;req.session.deviceFingerprint=deviceFingerprint(req);req.session.createdAt=Date.now();await log("dashboard_login_success",{ip,session_ttl_minutes:120,device_bound:true},owner.user);res.redirect(303,safeNext(req.body.next)||"/dashboard");});
+ const user=String(req.body.username||"").slice(0,200),pw=String(req.body.password||"").slice(0,500),lk=ip+"|"+user.trim().toLowerCase();
+ if(security.lockout.blocked(lk))return res.status(429).send("Too many login attempts. Try again later.");
+ let owner=owners.find(o=>equal(o.user.toLowerCase(),user.trim().toLowerCase())&&verify(pw,o.hash)); // usernames are not case sensitive
+ let twoFaFailed=false;
+ if(owner&&owner.totp&&!totpVerify(owner.totp,req.body.code)){twoFaFailed=true;owner=null;}
+ if(!owner){
+  const acct=twoFaFailed?null:await accounts.passwordLogin(user,pw);
+  if(acct){attempts.delete(ip);security.lockout.clear(lk);const out=await accounts.start(req,acct);return res.redirect(303,out.redirect);}
+  a.n++;if(a.n>=8){a.n=0;a.until=Date.now()+15*60*1000;}attempts.set(ip,a);security.lockout.fail(lk);
+  await log("dashboard_login_failed",{username:user.slice(0,80),ip,...(twoFaFailed?{reason:"two-step code"}:{})});
+  return res.redirect(303,"/login?error=1"+(safeNext(req.body.next)?"&next="+encodeURIComponent(safeNext(req.body.next)):""));
+ }
+ attempts.delete(ip);security.lockout.clear(lk);req.session.regenerate(async err=>{if(err)return res.status(500).send("Session error");req.session.owner=owner.user;req.session.deviceFingerprint=deviceFingerprint(req);req.session.createdAt=Date.now();await log("dashboard_login_success",{ip,session_ttl_minutes:120,device_bound:true},owner.user);res.redirect(303,safeNext(req.body.next)||"/dashboard");});
 });
 app.post("/dashboard/logout",logged,async(req,res)=>{const owner=req.session.owner;await log("dashboard_logout",{},owner);req.session.destroy(()=>res.redirect("/"));});
 
@@ -413,7 +426,8 @@ const onInteraction=async i=>{
  return i.editReply(`Finished for **${i.guild.name}**.\nAdded: **${added}**\nAlready in server: **${already}**\nFailed: **${failed}**${skipped?`\nSkipped (expired): **${skipped}**`:""}${examples.length?"\n\n"+examples.join("\n"):""}`);
 };
 realClient=freshClient();
-app.listen(port,"0.0.0.0",()=>console.log(`HTTP server listening on port ${port}`));
+const httpServer=app.listen(port,"0.0.0.0",()=>console.log(`HTTP server listening on port ${port}`));
+httpServer.headersTimeout=20000; httpServer.requestTimeout=30000; httpServer.keepAliveTimeout=5000; httpServer.maxHeadersCount=60; // slow-request protection
 (async()=>{
  try{ await schema(); }catch(e){ console.error("Database setup failed",e); process.exit(1); }
  syncAuthorizations().catch(e=>console.warn('Authorization check failed:',e.message));

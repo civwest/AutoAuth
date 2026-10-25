@@ -77,6 +77,7 @@ module.exports = function createProjects({ pool, enc, dec, log, express, collect
     try {
       const sig = Buffer.from(String(req.get("x-signature-ed25519") || ""), "hex"), ts = String(req.get("x-signature-timestamp") || "");
       if (sig.length !== 64 || !ts || !Buffer.isBuffer(req.body)) return false;
+      if (!/^\d{9,12}$/.test(ts) || Math.abs(Date.now() / 1000 - Number(ts)) > 300) return false; // reject old (replayed) requests
       const key = crypto.createPublicKey({ key: Buffer.concat([ED25519_DER, Buffer.from(hex, "hex")]), format: "der", type: "spki" });
       return crypto.verify(null, Buffer.concat([Buffer.from(ts), req.body]), key, sig);
     } catch { return false; }

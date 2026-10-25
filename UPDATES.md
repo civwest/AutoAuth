@@ -212,3 +212,9 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 - Footer shows the contact email (support@ your domain, or SUPPORT_EMAIL).
 - Public pages show an Offline banner at the top when the bot is not connected.
 - The home page shows an Under construction notice for features that are not built yet.
+
+## v1.6.0
+- Rate limiter with temporary IP blocks, stricter limits on login/sign-up/OAuth, and per-username login lockout.
+- Security headers (CSP, HSTS, no framing, nosniff), host check, cross-site POST blocking, URL length and slow-request limits, no-store caching for private pages, security.txt.
+- Two-step (TOTP) login for dashboard logins with a setup card on the profile page.
+- Weak account passwords rejected; Discord signatures older than 5 minutes rejected; webhook addresses must be Discord's; startup warnings for weak secrets.
