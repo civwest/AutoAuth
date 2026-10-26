@@ -12,7 +12,7 @@ const BAN_AFTER = 5; // limit hits inside 10 minutes
 const BAN_MS = 15 * 60 * 1000;
 
 const AUTH_PATHS = /^\/(login|signup|account\/logout|oauth\/callback|login\/callback|auth\/|optout)/;
-const HOOK_PATHS = /^\/projects\/[^/]+(?:\/[^/]+)?\/(interactions|webhook)$/;
+const HOOK_PATHS = /^(?:\/projects\/[^/]+(?:\/[^/]+)?\/(?:interactions|webhook)|\/stripe\/webhook)$/;
 const PRIVATE_PATHS = /^\/(dashboard|login|signup|users|channels|account|auth|report|optout)(\/|$)/;
 
 const CSP = [

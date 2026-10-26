@@ -218,3 +218,12 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 - Security headers (CSP, HSTS, no framing, nosniff), host check, cross-site POST blocking, URL length and slow-request limits, no-store caching for private pages, security.txt.
 - Two-step (TOTP) login for dashboard logins with a setup card on the profile page.
 - Weak account passwords rejected; Discord signatures older than 5 minutes rejected; webhook addresses must be Discord's; startup warnings for weak secrets.
+
+## v1.6.1
+- Plans page (`/subscribe`): black page, three plans, 1/3/6/12 month dropdown, prices in the visitor's currency, Subscribe buttons go to your Stripe Payment Links with the account email filled in.
+- Billing tab (Stripe customer portal) for subscribers; Stripe webhook keeps plans in sync; limits apply to database storage only.
+- Receipts emailed from noreply@autoauth.cfd (Resend).
+- Google Drive storage is built and free for everyone.
+- Authenticator-app two-step login with QR setup and recovery codes for dashboard logins and project accounts; the code is asked on `/login/2fa/<token>` only when 2FA is on.
+- The X and Google link buttons use the same flow on both dashboards.
+- Permissions that need Discord's own approval are no longer offered; a "Permissions missing?" link at the bottom of the list explains why.

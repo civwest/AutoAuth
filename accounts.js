@@ -5,7 +5,6 @@ const { weakPassword } = require("./security");
 
 const RESERVED = new Set(["users", "servers", "dm", "logs", "projects", "support", "messages", "discord", "database", "presence", "shutdown", "restart", "roles", "admin", "login", "logout", "signup", "account", "api", "oauth", "auth", "channels", "profile", "static", "public"]);
 const NAME = /^[a-z0-9](?:[a-z0-9-]{1,18}[a-z0-9])$/;
-const MAX_PROJECTS = 10;
 
 const SETUP = {
   oauth: (u) => [`In the Discord Developer Portal open your application > OAuth2 > Redirects and add <code>${u}</code>.`, "Build your authorize link with the same redirect URI and send people to it. Authorized users show up in the Users tab when storing is on."],
@@ -16,7 +15,7 @@ const SETUP = {
   invite: (u) => [`Share <code>${u}</code>. It sends people to Discord's authorize page for your bot.`],
 };
 
-module.exports = function createAccounts({ pool, enc, dec, log, express, projects, pdata, ownerIdent, site, esc, isOwnerName = () => false }) {
+module.exports = function createAccounts({ pool, enc, dec, log, express, projects, pdata, ownerIdent, twofa, drive, billing, site, esc, isOwnerName = () => false }) {
   const fp = (req) => crypto.createHash("sha256").update(String(req.get("user-agent") || "unknown")).digest("hex");
   const origin = () => { try { return new URL(process.env.REDIRECT_URI).origin; } catch { return ""; } };
   const hits = new Map();
@@ -74,13 +73,18 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
     const row = (await pool.query("SELECT id,username FROM accounts WHERE discord_id=$1", [u.id])).rows[0];
     return row ? start(req, row) : null;
   }
+  // Signs in. With two-step login on, the person is sent to /login/2fa/<token> first.
   async function start(req, row) {
+    if (twofa && (await twofa.active("account", String(row.id)))) return { redirect: await twofa.begin(req, { kind: "account", ident: String(row.id), label: row.username, method: "account" }) };
+    return finishLogin(req, row);
+  }
+  async function finishLogin(req, row) {
     await regen(req);
     req.session.acct = { id: String(row.id), username: row.username };
     req.session.acctFp = fp(req);
     await save(req);
     await pool.query("UPDATE accounts SET last_login=NOW() WHERE id=$1", [row.id]).catch(() => {});
-    return { redirect: "/dashboard/" + row.username };
+    return "/dashboard/" + row.username;
   }
   async function passwordLogin(username, pw) {
     const r = (await pool.query("SELECT id,username,password_hash FROM accounts WHERE username=$1", [String(username).trim().toLowerCase()])).rows[0];
@@ -93,6 +97,8 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
 
   function mountPublic(app) {
     social.mountPublic(app);
+    drive.mountPublic(app, { authPage });
+    billing.mountPublic(app);
     pdata.mountPublic(app);
     app.get("/signup", (req, res) => {
       if (req.session && req.session.acct) return res.redirect(303, "/dashboard/" + req.session.acct.username);
@@ -122,24 +128,33 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
     if (!s) return res.redirect(303, "/signup");
     if (req.session.acctFp !== fp(req)) return req.session.destroy(() => res.redirect(303, "/signup"));
     if (req.params.u && req.params.u !== s.username) return res.redirect(303, "/dashboard/" + s.username);
-    const a = (await pool.query("SELECT id,username,display_name,discord_name,avatar FROM accounts WHERE id=$1", [s.id])).rows[0];
+    const a = (await pool.query("SELECT id,username,display_name,discord_name,avatar,email FROM accounts WHERE id=$1", [s.id])).rows[0];
     if (!a) return req.session.destroy(() => res.redirect(303, "/signup"));
+    req.billing = await billing.hasCustomer(a.id);
     req.unread = (await pool.query("SELECT COUNT(*)::int n FROM support_messages WHERE account_id=$1 AND from_admin AND NOT read_user", [a.id])).rows[0].n;
     req.acct = a; next();
   };
 
   function mountDash({ app, renderFor, verifyOrigin, sendDm }) {
     const json = express.json({ limit: "100kb" });
-    const nav = (a, tab, unread) => {
+    const nav = (a, tab, unread, bill) => {
       const l = (k, h, t) => `<a class="${tab === k ? "on" : ""}" href="${h}">${t}</a>`;
-      return l("projects", `/dashboard/${a.username}`, "Projects") + l("support", `/dashboard/${a.username}/support`, "Support" + (unread ? ` (${unread})` : "")) + l("profile", `/dashboard/${a.username}/profile`, "Profile");
+      return l("projects", `/dashboard/${a.username}`, "Projects") + l("support", `/dashboard/${a.username}/support`, "Support" + (unread ? ` (${unread})` : "")) + l("profile", `/dashboard/${a.username}/profile`, "Profile") + (bill ? l("billing", `/dashboard/${a.username}/billing`, "Billing") : `<a href="/subscribe">Plans</a>`);
     };
-    const page = (req, res, tab, content) => renderFor(req, res, tab, content, { nav: nav(req.acct, tab, tab === "support" ? 0 : req.unread), who: req.acct.username, whoHref: `/dashboard/${req.acct.username}/profile`, logout: "/account/logout" });
+    const page = (req, res, tab, content) => renderFor(req, res, tab, content, { nav: nav(req.acct, tab, tab === "support" ? 0 : req.unread, req.billing), who: req.acct.username, whoHref: `/dashboard/${req.acct.username}/profile`, logout: "/account/logout" });
     const full = (a, name) => `${a.username}/${name}`;
-    const own = async (a, name) => (await pool.query("SELECT slug,name,type,config,locked FROM side_projects WHERE slug=$1 AND owner_account=$2", [full(a, String(name)), a.id])).rows[0];
+    const own = async (a, name) => (await pool.query("SELECT slug,name,type,config,locked,owner_account FROM side_projects WHERE slug=$1 AND owner_account=$2", [full(a, String(name)), a.id])).rows[0];
     const short = (a, p) => ({ ...p, slug: p.slug.slice(a.username.length + 1) });
 
+    // Google Drive storage needs a connected Drive. Free for everyone.
+    const needDrive = async (id, config) => {
+      if (config.storage !== "drive") return;
+      if (!drive.on()) throw new Error("Google Drive is not set up on this site yet.");
+      if (!(await drive.linkOf(id))) throw new Error("Connect Google Drive on your Profile page first, then pick it here.");
+    };
+
     // projects list
+    billing.mountDash({ app, acctOnly, verifyOrigin, page });
     app.get("/dashboard/:u", acctOnly, async (req, res) => {
       const a = req.acct;
       const rows = (await pool.query("SELECT p.slug,p.name,p.type,p.config,p.locked,(SELECT COUNT(*)::int FROM side_project_users u WHERE u.slug=p.slug) AS users FROM side_projects p WHERE p.owner_account=$1 ORDER BY p.created_at DESC", [a.id])).rows.map((p) => short(a, p));
@@ -147,7 +162,9 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
         prefix: a.username + "/", urlFn: (p) => projects.urlOf({ type: p.type, slug: full(a, p.slug) }),
         extra: (p) => `<a class="btn secondary" href="/dashboard/${a.username}/${esc(p.slug)}/setup">Open</a>`,
       });
-      page(req, res, "projects", content + `<p class="muted" style="margin-top:14px">Data collected by your projects is encrypted. AutoAuth's admins cannot read it or open this dashboard.</p>`);
+      const L = await billing.limits(a.id), used = await billing.usage(a.id);
+      const strip = `<p class="muted" style="margin:0 0 14px">Plan: <b>${esc(L.name)}</b> · Database storage ${used} of ${L.dbUsers.toLocaleString("en-US")} users · ${rows.length} of ${L.projects} projects · Google Drive storage is unlimited · <a href="${req.billing ? `/dashboard/${esc(a.username)}/billing` : "/subscribe"}" style="color:#9db4ff">${req.billing ? "Billing" : "See plans"}</a></p>`;
+      page(req, res, "projects", strip + content + `<p class="muted" style="margin-top:14px">Data collected by your projects is encrypted. AutoAuth's admins cannot read it or open this dashboard.</p>`);
     });
     app.post("/dashboard/:u/projects", acctOnly, verifyOrigin, json, async (req, res) => {
       const a = req.acct, b = req.body || {}, name = clip(b.name, 40), type = String(b.type || "");
@@ -155,10 +172,10 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
       if (!projects.TYPES[type]) return res.status(400).json({ error: "Choose what the project is for." });
       if (!slug) return res.status(400).json({ error: "Enter a name using letters or numbers." });
       if (limited("pc:" + a.id, 10, 3600000)) return res.status(429).json({ error: "Too many projects created. Try again later." });
-      const n = (await pool.query("SELECT COUNT(*)::int n FROM side_projects WHERE owner_account=$1", [a.id])).rows[0].n;
-      if (n >= MAX_PROJECTS) return res.status(400).json({ error: `You can have up to ${MAX_PROJECTS} projects.` });
+      const n = (await pool.query("SELECT COUNT(*)::int n FROM side_projects WHERE owner_account=$1", [a.id])).rows[0].n, L = await billing.limits(a.id);
+      if (n >= L.projects) return res.status(400).json({ error: `Your ${L.name} plan allows up to ${L.projects} projects. See Plans for more.` });
       try {
-        const config = projects.clean(type, b.config);
+        const config = projects.clean(type, b.config); await needDrive(a.id, config);
         await pool.query("INSERT INTO side_projects(slug,name,type,config,created_by,owner_account) VALUES($1,$2,$3,$4,$5,$6)", [full(a, slug), name, type, JSON.stringify(config), a.username, a.id]);
         await pool.query("INSERT INTO project_logs(slug,event_type,detail) VALUES($1,'project_created',$2)", [full(a, slug), JSON.stringify({ type })]);
         res.json({ ok: true, slug });
@@ -169,7 +186,7 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
       if (!p) return res.status(404).json({ error: "Project not found." });
       if (p.locked) return res.status(403).json({ error: "This project is locked." });
       try {
-        const config = projects.clean(p.type, (req.body || {}).config, p.config);
+        const config = projects.clean(p.type, (req.body || {}).config, p.config); await needDrive(req.acct.id, config);
         await pool.query("UPDATE side_projects SET config=$2 WHERE slug=$1", [p.slug, JSON.stringify(config)]);
         await pool.query("INSERT INTO project_logs(slug,event_type,detail) VALUES($1,'project_updated','{}')", [p.slug]);
         res.json({ ok: true });
@@ -207,7 +224,8 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
     });
     app.get("/dashboard/:u/:name/logs", acctOnly, async (req, res) => {
       const a = req.acct, p = await own(a, req.params.name); if (!p) return res.status(404).send("Not found");
-      const r = (await pool.query("SELECT event_type,detail,created_at FROM project_logs WHERE slug=$1 ORDER BY id DESC LIMIT 200", [p.slug])).rows;
+      const L = await billing.limits(req.acct.id);
+      const r = (await pool.query("SELECT event_type,detail,created_at FROM project_logs WHERE slug=$1 AND created_at>NOW()-make_interval(days=>$2) ORDER BY id DESC LIMIT 200", [p.slug, L.logDays])).rows;
       page(req, res, "projects", sub(a, p, "logs") + `<div class="card"><div class="wrap"><table class="stack"><tr><th>Time (UTC)</th><th>Event</th><th>Details</th></tr>${r.map((x) => `<tr><td data-l="Time">${esc(new Date(x.created_at).toISOString().slice(0, 19).replace("T", " "))}</td><td data-l="Event">${esc(x.event_type)}</td><td data-l="Details"><code style="word-break:break-all">${esc(JSON.stringify(x.detail))}</code></td></tr>`).join("") || '<tr><td colspan="3">No events yet.</td></tr>'}</table></div></div>`);
     });
 
@@ -238,22 +256,35 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
       const row = (label, linked, link, unlink) => `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)"><div style="flex:1;min-width:120px"><b>${label}</b><div class="muted">${linked ? esc(linked) : "Not linked"}</div></div>${linked ? unlink : link}</div>`;
       const unl = (p) => `<form method="post" action="/dashboard/${esc(a.username)}/profile/unlink/${p}" style="margin:0"><button class="secondary" style="width:auto">Unlink</button></form>`;
       const lnk = (html) => `<div style="width:230px;max-width:100%">${html}</div>`;
-      const social_ = Object.keys(social.PROV).map((k) => { const id = ids.find((i) => i.provider === k); return row(social.PROV[k].label, id && (id.name || "Linked"), lnk(social.linkButton(k)), unl(k)); }).join("");
+      const social_ = Object.keys(social.PROV).map((k) => { const id = ids.find((i) => i.provider === k); return row(social.PROV[k].label, id && (id.name || "Linked"), lnk(social.linkButton(k, "account")), unl(k)); }).join("");
       page(req, res, "profile", `<div class="top"><div><h1>Profile</h1></div></div><div class="card" style="max-width:560px"><div style="display:flex;gap:14px;align-items:center">${a.avatar ? `<img src="${esc(a.avatar)}" alt="" width="64" height="64" style="border-radius:50%">` : ""}<div><b>${esc(a.display_name || a.username)}</b><div class="muted">@${esc(a.username)}</div></div></div>
 <form method="post" action="/dashboard/${esc(a.username)}/profile" style="margin-top:16px"><label>Display name</label><input name="display_name" maxlength="40" value="${esc(a.display_name || "")}"><button class="green" style="margin-top:12px">Save</button></form></div>
+<div class="card" style="max-width:560px;margin-top:16px"><h2>Email</h2><form method="post" action="/dashboard/${esc(a.username)}/profile/email"><p class="muted" style="margin-top:0">Needed for billing. Use the email you pay with, so your subscription finds this account.</p><input type="email" name="email" maxlength="200" autocomplete="email" value="${esc(a.email || "")}" required><button class="green" style="margin-top:10px;width:auto">Save email</button></form></div>
 <div class="card" style="max-width:560px;margin-top:16px"><h2>Linked accounts</h2>
 ${row("Discord", a.discord_name, lnk(social.btn("discord", "Link Discord", { post: "/signup/discord", fields: { intent: "link" } })), unl("discord"))}${social_}</div>
+${drive.card({ link: await drive.linkOf(a.id), base: `/dashboard/${a.username}/profile`, hasDriveProjects: !!(await pool.query("SELECT 1 FROM side_projects WHERE owner_account=$1 AND config->>'storage'='drive' LIMIT 1", [a.id])).rows[0] })}
+${twofa.card({ ...(await twofa.summary("account", a.id)), base: `/dashboard/${a.username}/profile/2fa` })}
 <div class="card" style="max-width:560px;margin-top:16px"><h2>Password</h2><form method="post" action="/dashboard/${esc(a.username)}/profile/password">${hasPw ? '<label>Current password</label><input type="password" name="current" autocomplete="current-password" required>' : ""}<label>New password</label><input type="password" name="password" minlength="8" autocomplete="new-password" required><button class="green" style="margin-top:12px">${hasPw ? "Change password" : "Set password"}</button></form></div>
 <div class="card" style="max-width:560px;margin-top:16px;border-color:#7a2b35"><h2>Delete account</h2><button type="button" class="danger" onclick="openDlg('dlg-del')">Delete account</button></div>
 <dialog id="dlg-del"><div class="dlg-top"><h2 style="margin:0">Delete account</h2><button type="button" class="secondary" onclick="closeAll()">Close</button></div>
 <p>This deletes your projects, stored users, logs and support messages. It cannot be undone.</p><form method="post" action="/dashboard/${esc(a.username)}/profile/delete"><label>Type <b>${esc(a.username)}</b> to confirm</label><input name="confirm" autocomplete="off" required><button class="danger" style="margin-top:12px">Delete everything</button></form></dialog>`);
     });
+    const tfh = twofa.handlers((req) => (req.acct ? { kind: "account", ident: req.acct.id, label: req.acct.username } : null));
+    for (const p of ["start", "enable", "disable"]) app.post("/dashboard/:u/profile/2fa/" + p, acctOnly, verifyOrigin, json, tfh[p]);
     const form = express.urlencoded({ extended: false, limit: "5kb" });
     app.post("/dashboard/:u/profile", acctOnly, verifyOrigin, form, async (req, res) => {
       const n = clip(req.body.display_name, 40) || req.acct.username;
       await pool.query("UPDATE accounts SET display_name=$2 WHERE id=$1", [req.acct.id, n]);
       res.redirect(303, back(req, "Saved."));
     });
+    app.post("/dashboard/:u/profile/email", acctOnly, verifyOrigin, form, async (req, res) => {
+      const e = clip(req.body.email, 200).toLowerCase();
+      if (!billing.EMAIL.test(e)) return res.redirect(303, back(req, "Enter a valid email address."));
+      try { await pool.query("UPDATE accounts SET email=$2 WHERE id=$1", [req.acct.id, e]); } catch (x) { if (x.code === "23505") return res.redirect(303, back(req, "That email is already used by another account.")); throw x; }
+      await billing.claimByEmail(req.acct.id, e);
+      res.redirect(303, back(req, "Email saved."));
+    });
+    app.post("/dashboard/:u/profile/drive/unlink", acctOnly, verifyOrigin, async (req, res) => { await drive.disconnect(req.acct.id); await log("drive_disconnected", {}, req.acct.username); res.redirect(303, back(req, "Google Drive disconnected.")); });
     app.post("/dashboard/:u/profile/password", acctOnly, verifyOrigin, form, async (req, res) => {
       const r = (await pool.query("SELECT password_hash FROM accounts WHERE id=$1", [req.acct.id])).rows[0], pw = String(req.body.password || "");
       if (limited("pw:" + req.acct.id, 10, 600000)) return res.redirect(303, back(req, "Too many attempts."));
@@ -273,12 +304,15 @@ ${row("Discord", a.discord_name, lnk(social.btn("discord", "Link Discord", { pos
     app.post("/dashboard/:u/profile/delete", acctOnly, verifyOrigin, form, async (req, res) => {
       const a = req.acct;
       if (String(req.body.confirm || "").trim().toLowerCase() !== a.username) return res.redirect(303, back(req, "Type your username exactly to delete the account."));
+      const sr = await billing.subRow(a.id); if (sr && ["active", "trialing", "past_due"].includes(sr.status)) return res.redirect(303, back(req, "Cancel your subscription in Billing before deleting your account, so you are not charged again."));
       const slugs = (await pool.query("SELECT slug FROM side_projects WHERE owner_account=$1", [a.id])).rows.map((r) => r.slug);
       if (slugs.length) {
         await pool.query("DELETE FROM side_project_users WHERE slug=ANY($1)", [slugs]);
         await pool.query("DELETE FROM project_logs WHERE slug=ANY($1)", [slugs]);
         await pool.query("DELETE FROM project_data WHERE slug=ANY($1)", [slugs]).catch(() => {});
       }
+      await pool.query("DELETE FROM totp_secrets WHERE kind='account' AND ident=$1", [String(a.id)]).catch(() => {});
+      await drive.disconnect(a.id).catch(() => {});
       await pool.query("DELETE FROM accounts WHERE id=$1", [a.id]); // projects, identities and support messages cascade
       await log("account_deleted", { username: a.username });
       req.session.destroy(() => res.redirect(303, "/"));
@@ -310,8 +344,9 @@ poll();setInterval(poll,4000);})();`;
     app.get("/dashboard/support", logged, async (req, res) => {
       const r = (await pool.query(`SELECT a.id,a.username,a.display_name,a.created_at,
         (SELECT COUNT(*)::int FROM support_messages m WHERE m.account_id=a.id AND NOT m.from_admin AND NOT m.read_admin) AS unread,
-        (SELECT MAX(created_at) FROM support_messages m WHERE m.account_id=a.id) AS last FROM accounts a ORDER BY unread DESC, last DESC NULLS LAST LIMIT 300`)).rows;
-      render(req, res, "support", `<div class="top"><div><h1>Support</h1></div></div><div class="card">${r.map((a) => `<a class="dmrow" href="/dashboard/support/${a.id}"><div style="flex:1"><b>${esc(a.display_name || a.username)}</b> <span class="muted">@${esc(a.username)}</span></div>${a.unread ? `<span class="pill">${a.unread} new</span>` : ""}</a>`).join("") || '<p class="muted">No accounts yet.</p>'}</div>` + await pdata.flagsHtml());
+        (SELECT MAX(created_at) FROM support_messages m WHERE m.account_id=a.id) AS last,
+        (SELECT MAX(tier) FROM subscriptions s WHERE s.account_id=a.id AND s.status IN ('active','trialing','past_due') AND s.tier>=2) AS prio FROM accounts a ORDER BY unread DESC, prio DESC NULLS LAST, last DESC NULLS LAST LIMIT 300`)).rows;
+      render(req, res, "support", `<div class="top"><div><h1>Support</h1></div></div><div class="card">${r.map((a) => `<a class="dmrow" href="/dashboard/support/${a.id}"><div style="flex:1"><b>${esc(a.display_name || a.username)}</b> <span class="muted">@${esc(a.username)}</span>${a.prio ? ' <span class="pill">Priority</span>' : ""}</div>${a.unread ? `<span class="pill">${a.unread} new</span>` : ""}</a>`).join("") || '<p class="muted">No accounts yet.</p>'}</div>` + await pdata.flagsHtml());
     });
     const acc = async (id) => (await pool.query("SELECT id,username,display_name FROM accounts WHERE id=$1", [Number(id) || 0])).rows[0];
     app.get("/dashboard/support/:id", logged, async (req, res) => {
@@ -335,5 +370,5 @@ poll();setInterval(poll,4000);})();`;
   // Signed-in accounts that open /dashboard land on their own dashboard.
   const landing = (req) => (req.session && req.session.acct && !req.session.owner ? "/dashboard/" + req.session.acct.username : null);
 
-  return { social, socialButtons, accountDiscord, accountLogin, passwordLogin, start, authPage, discordLink, mountPublic, mountDash, mountAdmin, landing };
+  return { social, socialButtons, accountDiscord, accountLogin, passwordLogin, start, finishLogin, authPage, discordLink, mountPublic, mountDash, mountAdmin, landing };
 };

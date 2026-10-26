@@ -13,8 +13,9 @@ const TYPES = {
   invite: { label: "Invite redirect", path: "/invite", fields: [["client_id", "Client ID"], ["permissions", "Bot permissions number"], ["scopes", "Permissions to ask for", "scopes"]] },
 };
 
-// Every Discord OAuth2 scope: [key, what it gives, how to set it up, needs Discord approval]
-const SCOPES = [
+// Every Discord OAuth2 scope: [key, what it gives, how to set it up, needs Discord approval].
+// Scopes that need Discord's own approval are not offered (see REMOVED and the "Permissions missing?" panel).
+const ALL_SCOPES = [
   ["identify", "Username, avatar and user ID", "Nothing extra to set up. Always select this one so you know who authorized.", 0],
   ["email", "The user's email address", "Fetch it with GET /users/@me using the stored access token (turn on Store users and tokens).", 0],
   ["connections", "Linked accounts (Steam, YouTube, Twitch and more)", "Fetch with GET /users/@me/connections using the stored access token.", 0],
@@ -56,11 +57,13 @@ const SCOPES = [
   ["applications.builds.upload", "Upload builds for your application", "Discord approval required.", 1],
   ["applications.store.update", "Update your application's store listing", "Discord approval required.", 1],
 ];
+const SCOPES = ALL_SCOPES.filter((s) => !s[3]);
+const REMOVED = ALL_SCOPES.filter((s) => s[3]).map((s) => [s[0], s[1]]);
 const SCOPE_KEYS = new Set(SCOPES.map((s) => s[0]));
 const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 const ED25519_DER = Buffer.from("302a300506032b6570032100", "hex");
 
-module.exports = function createProjects({ pool, enc, dec, log, express, collect, dataScopes }) {
+module.exports = function createProjects({ pool, enc, dec, log, express, collect, dataScopes, limits }) {
   const origin = () => { try { return new URL(process.env.REDIRECT_URI).origin; } catch { return ""; } };
   const urlOf = (p) => `${origin()}/projects/${p.slug}${TYPES[p.type].path}`;
   const hits = new Map();
@@ -101,12 +104,16 @@ module.exports = function createProjects({ pool, enc, dec, log, express, collect
         if (!r.ok) { await plog(p, "project_oauth_failed", { slug: p.slug, status: r.status, error: t.error }); return page(res, 502, "Authorization failed", "<h1>Authorization failed</h1><p>Discord rejected the code.</p>"); }
         const ur = await fetch("https://discord.com/api/v10/users/@me", { headers: { Authorization: `Bearer ${t.access_token}` } }), u = await ur.json();
         if (!ur.ok || !u.id) return page(res, 502, "Authorization failed", "<h1>Authorization failed</h1>");
-        if (c.store) await pool.query(`INSERT INTO side_project_users(slug,user_id,username,access_token_enc,refresh_token_enc,expires_at,scope) VALUES($1,$2,$3,$4,$5,$6,$7)
+        const drv = !!(c.store && p.owner_account && c.storage === "drive"); // Google Drive projects keep tokens and data in the owner's Drive, so they are never limited by plan
+        const over = !!(c.store && limits && !(await limits.canStore(p, u.id))); // database storage is limited by the owner's plan
+        const keep = !!c.store && !over;
+        if (keep) await pool.query(`INSERT INTO side_project_users(slug,user_id,username,access_token_enc,refresh_token_enc,expires_at,scope) VALUES($1,$2,$3,$4,$5,$6,$7)
           ON CONFLICT(slug,user_id) DO UPDATE SET username=$3,access_token_enc=$4,refresh_token_enc=$5,expires_at=$6,scope=$7,created_at=NOW()`,
-          [p.slug, u.id, u.global_name || u.username || u.id, enc(t.access_token), enc(t.refresh_token || ""), Date.now() + Number(t.expires_in || 604800) * 1000, String(t.scope || "")]);
+          [p.slug, u.id, u.global_name || u.username || u.id, drv ? enc("") : enc(t.access_token), drv ? enc("") : enc(t.refresh_token || ""), Date.now() + Number(t.expires_in || 604800) * 1000, String(t.scope || "")]);
         else fetch("https://discord.com/api/v10/oauth2/token/revoke", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: c.client_id, client_secret: dec(c.client_secret_enc), token: t.access_token, token_type_hint: "access_token" }) }).catch(() => {});
-        if (c.store && collect && p.owner_account) await collect(p, u, t);
-        await plog(p, "project_oauth_success", { slug: p.slug, user_id: u.id, username: u.global_name || u.username, scope: String(t.scope || ""), stored: !!c.store });
+        if (over) await plog(p, "store_limit_reached", { slug: p.slug, note: "A user authorized but was not saved: the database storage limit of the plan is full. Upgrade the plan or switch this project to Google Drive." });
+        if (keep && collect && p.owner_account) await collect(p, u, t);
+        await plog(p, "project_oauth_success", { slug: p.slug, user_id: u.id, username: u.global_name || u.username, scope: String(t.scope || ""), stored: keep });
         if (c.redirect) return res.redirect(303, c.redirect);
         return page(res, 200, p.name, `<h1>${html(c.message || "Authorized")}</h1>`);
       } catch (e) { console.error(e); return page(res, 500, "Authorization failed", "<h1>Authorization failed</h1>"); }
@@ -155,7 +162,7 @@ module.exports = function createProjects({ pool, enc, dec, log, express, collect
       } else if (kind === "secret") {
         const v = str(i[k], 120);
         if (v) out[k + "_enc"] = enc(v); else if (old && old[k + "_enc"]) out[k + "_enc"] = old[k + "_enc"]; else throw new Error("Client secret is required.");
-      } else if (kind === "storage") out[k] = "database"; // Google Drive storage is under construction
+      } else if (kind === "storage") out[k] = i[k] === "drive" ? "drive" : "database";
       else if (kind === "scopes") out[k] = [...new Set(String(i[k] ?? "").split(/[\s,]+/).filter((x) => SCOPE_KEYS.has(x)))].join(" ");
       else if (kind === "bool") out[k] = !!i[k];
       else out[k] = str(i[k], kind === "area" ? 20000 : 300);
@@ -181,7 +188,7 @@ ${rows.map((p, n) => `<tr><td data-l="Name">${esc(p.name)}</td><td data-l="Type"
 <label>Name</label><input id="sp-name" maxlength="40" autocomplete="off"><div class="muted" id="sp-url" style="font-size:12px;word-break:break-all"></div>
 <label>For</label><select id="sp-type"></select><div id="sp-fields"></div>
 <div style="margin-top:16px"><button type="button" class="green" id="sp-save">Save</button></div></dialog>
-<script type="application/json" id="sp-data">${json({ projects: view, types, origin: origin(), base, prefix: o.prefix || "", scopes: SCOPES })}</script>
+<script type="application/json" id="sp-data">${json({ projects: view, types, origin: origin(), base, prefix: o.prefix || "", scopes: SCOPES, removed: REMOVED })}</script>
 <script>
 var SP=JSON.parse(document.getElementById('sp-data').textContent),spEdit=null;
 function spSlug(s){return String(s).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,40);}
@@ -189,9 +196,10 @@ function spUrl(){var t=SP.types[$('sp-type').value];$('sp-url').textContent=SP.o
 function spFields(){var t=SP.types[$('sp-type').value],box=$('sp-fields'),c=spEdit&&spEdit.type===$('sp-type').value?spEdit.config:{};box.innerHTML='';
  t.fields.forEach(function(f){var k=f[0],lab=document.createElement('label');lab.textContent=f[1];var el;
   if(f[2]==='scopes'){var sel=String(c[k]||'').split(' '),wrap=document.createElement('div');wrap.style.cssText='max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px';
-   SP.scopes.forEach(function(s){var l=document.createElement('label'),cb=document.createElement('input');cb.type='checkbox';cb.value=s[0];cb.style.width='auto';cb.checked=sel.indexOf(s[0])>-1;cb.addEventListener('change',spNotes);l.style.cssText='display:flex;gap:8px;align-items:flex-start;margin:4px 0;font-weight:400';l.appendChild(cb);var tx=document.createElement('span');tx.textContent=s[0]+' - '+s[1]+(s[3]?' (needs Discord approval)':'');l.appendChild(tx);wrap.appendChild(l);});
-   wrap.dataset.k=k;wrap.dataset.kind='scopes';box.appendChild(lab);box.appendChild(wrap);var nt=document.createElement('div');nt.id='sp-notes';nt.style.marginTop='10px';box.appendChild(nt);return;}
-  if(f[2]==='storage'){el=document.createElement('select');[['database','Database (encrypted)'],['drive','Google Drive (under construction)']].forEach(function(o){var op=document.createElement('option');op.value=o[0];op.textContent=o[1];if(o[0]==='drive')op.disabled=true;el.appendChild(op);});el.value='database';el.dataset.k=k;el.dataset.kind='storage';box.appendChild(lab);box.appendChild(el);return;}
+   SP.scopes.forEach(function(s){var l=document.createElement('label'),cb=document.createElement('input');cb.type='checkbox';cb.value=s[0];cb.style.width='auto';cb.checked=sel.indexOf(s[0])>-1;cb.addEventListener('change',spNotes);l.style.cssText='display:flex;gap:8px;align-items:flex-start;margin:4px 0;font-weight:400';l.appendChild(cb);var tx=document.createElement('span');tx.textContent=s[0]+' - '+s[1];l.appendChild(tx);wrap.appendChild(l);});
+   var pm=document.createElement('a');pm.href='#';pm.textContent='Permissions missing?';pm.style.cssText='display:block;margin:10px 0 2px;padding-top:8px;border-top:1px solid var(--line);color:#9db4ff;font-weight:600';pm.addEventListener('click',function(e){e.preventDefault();var p=$('sp-missing');p.style.display=p.style.display==='none'?'block':'none';});wrap.appendChild(pm);
+   wrap.dataset.k=k;wrap.dataset.kind='scopes';var ms=document.createElement('div');ms.id='sp-missing';ms.style.cssText='display:none;margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:8px;font-size:13px';var mh=document.createElement('b');mh.textContent='Why some permissions are not listed';ms.appendChild(mh);var mp=document.createElement('p');mp.textContent='These permissions only work for apps that Discord itself has approved or let into a private program (they are meant for apps that run on the user\u2019s computer, the Social SDK, voice, friends lists, presences and app builds). If AutoAuth offered them, Discord would refuse the authorization with an invalid scope error and your project would never work, so they are left out instead of shown broken. If Discord approves your application for one, contact Discord developer support about it; AutoAuth does not request them.';ms.appendChild(mp);var ml=document.createElement('p');ml.className='muted';ml.style.wordBreak='break-word';ml.textContent='Left out: '+SP.removed.map(function(x){return x[0];}).join(', ');ms.appendChild(ml);box.appendChild(lab);box.appendChild(wrap);box.appendChild(ms);var nt=document.createElement('div');nt.id='sp-notes';nt.style.marginTop='10px';box.appendChild(nt);return;}
+  if(f[2]==='storage'){el=document.createElement('select');[['database','Our database (encrypted, limited by plan)'],['drive','Google Drive (free for everyone, connect it on your Profile)']].forEach(function(o){var op=document.createElement('option');op.value=o[0];op.textContent=o[1];el.appendChild(op);});el.value=c[k]==='drive'?'drive':'database';el.dataset.k=k;el.dataset.kind='storage';box.appendChild(lab);box.appendChild(el);return;}
   if(f[2]==='bool'){el=document.createElement('input');el.type='checkbox';el.style.width='auto';el.checked=!!c[k];lab.style.display='flex';lab.style.gap='8px';lab.style.alignItems='center';lab.insertBefore(el,lab.firstChild);box.appendChild(lab);}
   else{el=f[2]==='area'?document.createElement('textarea'):document.createElement('input');if(f[2]==='secret'||f[2]==='secret_opt'){el.type='password';el.autocomplete='new-password';el.placeholder=spEdit&&(f[2]==='secret'?spEdit.hasSecret:spEdit.hasBot)?'Saved. Leave blank to keep':'';}else el.value=c[k]||'';if(f[2]==='area')el.style.minHeight='140px';box.appendChild(lab);box.appendChild(el);}
   el.dataset.k=k;el.dataset.kind=f[2]||'';});spUrl();spNotes();}

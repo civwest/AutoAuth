@@ -48,7 +48,8 @@ module.exports = function createSocial(h) {
   // Login and signup pages: only providers that are set up.
   const buttons = (intent) => Object.keys(PROV).filter(on).map((k) => btn(k, `${verb(intent)} with ${PROV[k].label}`, { href: `/auth/${k}/start?intent=${intent}` })).join("");
   // Profile: always shown, so the account can be linked as soon as the provider is set up.
-  const linkButton = (k) => btn(k, `Link ${PROV[k].label}`, { href: `/auth/${k}/start?intent=link` });
+  // One link flow for both sides of the site: who=owner (main dashboard) or who=account (project dashboards).
+  const linkButton = (k, who) => btn(k, `Link ${PROV[k].label}`, { href: `/auth/${k}/start?intent=link&for=${who === "owner" ? "owner" : "account"}` });
 
   const identities = async (accountId) => (await pool.query("SELECT provider,subject,name FROM account_identities WHERE account_id=$1", [accountId])).rows;
 
@@ -59,7 +60,11 @@ module.exports = function createSocial(h) {
       const k = req.params.provider, P = PROV[k];
       if (!P) return res.status(404).send("Not found");
       if (!on(k)) return res.status(503).send(authPage({ title: "Sign in", sub: `${P.label} sign-in is not set up yet`, error: "", top: "", form: "", foot: `<a class="alt" href="${req.session && req.session.acct ? `/dashboard/${req.session.acct.username}/profile` : "/login"}">Back</a>` }).replace('<div class="or"><span></span>or<span></span></div>', ""));
-      const intent = ["signup", "login", "link", "olink"].includes(req.query.intent) ? req.query.intent : "login";
+      let intent = ["signup", "login", "link", "olink"].includes(req.query.intent) ? req.query.intent : "login";
+      if (intent === "link" || intent === "olink") { // one flow: the session decides whether this links an owner login or a project account
+        const who = req.query.for === "owner" || intent === "olink" ? "owner" : req.query.for === "account" ? "account" : (req.session && req.session.acct ? "account" : "owner");
+        intent = who === "owner" ? "olink" : "link";
+      }
       if (intent === "link" && !(req.session && req.session.acct)) return res.redirect(303, "/login");
       if (intent === "olink" && !(req.session && req.session.owner)) return res.redirect(303, "/login");
       if (limited("os:" + req.ip, 30, 600000)) return res.status(429).send("Too many attempts. Try again later.");

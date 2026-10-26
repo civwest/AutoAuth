@@ -237,7 +237,18 @@ Built in, with nothing to turn on:
 | `ALLOWED_HOSTS` | | Extra allowed host names, or `*` to turn the host check off |
 | `DASHBOARD_ADMINn_TOTP_SECRET` | | Two-step login secret for that dashboard login |
 
-The rate limiter keeps its counts in memory, so they reset when the service restarts and are not shared if you run more than one instance. Two-step login for project accounts is under construction.
+The rate limiter keeps its counts in memory, so they reset when the service restarts and are not shared if you run more than one instance. Project accounts and dashboard logins can both turn on authenticator-app login from their profile page.
+
+## Plans, billing and receipts
+
+- `/subscribe` shows three plans (Starter has a 14-day free trial) with a 1 / 3 / 6 / 12 month dropdown. Prices are set in CAD; visitors see an estimate in their own currency from a country cookie (`aa_cc`) and a live exchange rate, and Stripe shows the exact amount at checkout.
+- Each Subscribe button goes to one of your Stripe Payment Links and adds the account's email (`prefilled_email`) and `client_reference_id`, so the subscription matches the account. Accounts need an email first; the site asks for one.
+- Plans only raise limits and add extras (more stored users in our database, more projects, longer log history, priority support). **Google Drive storage is free and identical for everyone.**
+- Subscribers get a Billing tab that opens Stripe's customer portal.
+- Receipts are emailed from `noreply@` your domain through Resend (`RESEND_API_KEY`, `RECEIPT_FROM`), once per paid invoice.
+- Tell the site which product is which tier: add metadata `tier` = `1`, `2` or `3` to each Stripe product (or price), or list the ids in `STRIPE_TIER_<n>_IDS`.
+- Stripe webhook: endpoint `https://YOUR-DOMAIN/stripe/webhook`, events `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`. Copy its signing secret into `STRIPE_WEBHOOK_SECRET`.
+- Two-step login: after the password or sign-in step, people go to `/login/2fa/<one-time token>`; the code box never appears on the normal login page.
 
 ## Under construction
 
@@ -245,8 +256,6 @@ The home page shows this list in a notice at the top. The contact email in the f
 
 These parts are not built yet and show "Under construction" where they appear. They are removed from this list when the code is added.
 
-- **Two-step login for project accounts** (dashboard logins already have it).
-- **Google Drive storage** for project data (the storage option in the project dialog is disabled). It will need a Google OAuth client with the Drive API enabled.
 - **Controls for these OAuth permissions** (each selected one gets its own tab that says Under construction): `guilds.members.read`, `bot`, `applications.commands`, `applications.commands.update`, `applications.commands.permissions.update`, `role_connections.write`, `openid`, `applications.entitlements`, and every permission Discord restricts (RPC, relationships, presences, activities, voice, lobbies, SDK, builds, store, messages, DM channels, group DMs).
 
-Built and working: Discord, Google and X sign-in, project accounts, project dashboards, Support chat, data tabs for `identify`, `email`, `connections`, `guilds`, `webhook.incoming` and `guilds.join`, abuse flagging, and account deletion.
+Built and working: authenticator-app two-step login, Google Drive storage (free for everyone), plans and billing, Discord, Google and X sign-in, project accounts, project dashboards, Support chat, data tabs for `identify`, `email`, `connections`, `guilds`, `webhook.incoming` and `guilds.join`, abuse flagging, and account deletion.

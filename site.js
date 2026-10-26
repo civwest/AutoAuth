@@ -100,7 +100,7 @@ function goExternal(){window.open(extUrl,'_blank','noopener,noreferrer');closeDl
 
 let probe = () => ({ offline: false });
 const SUPPORT_EMAIL = (() => { const e = String(process.env.SUPPORT_EMAIL || "").trim(); if (/^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/.test(e)) return e; try { return "support@" + new URL(process.env.REDIRECT_URI).hostname.replace(/^www\./, ""); } catch { return ""; } })();
-const UNDER_CONSTRUCTION = "Google Drive storage and the controls for some project permissions";
+const UNDER_CONSTRUCTION = "The controls for some project permissions";
 function notices(active) {
   let out = "";
   if (probe().offline) out += `<div class="banner" role="status" style="margin-top:0"><b>Offline.</b> The bot is not running right now.</div>`;

@@ -51,6 +51,9 @@ for (let n=1;n<=9;n++) {
 }
 if(!owners.length) console.warn("No dashboard logins are set (DASHBOARD_ADMINn_USER / _PASSWORD_HASH), so nobody can sign in to the dashboard.");
 const attempts = new Map();
+const rl=new Map();const limited=(k,max,ms=60000)=>{const n=Date.now(),h=rl.get(k);if(!h||h.until<n){rl.set(k,{n:1,until:n+ms});return false;}return ++h.n>max;};
+setInterval(()=>{const n=Date.now();for(const[k,v]of rl)if(v.until<n)rl.delete(k);},60000).unref();
+const twofa=require("./twofa")({pool,enc:(x)=>enc(x),dec:(x)=>dec(x),esc:(x)=>esc(x),log:(...a)=>log(...a),page:(...a)=>accounts.authPage(...a),limited});
 
 function enc(s) { const iv=crypto.randomBytes(12), c=crypto.createCipheriv("aes-256-gcm",key,iv), b=Buffer.concat([c.update(s,"utf8"),c.final()]); return [iv,c.getAuthTag(),b].map(x=>x.toString("base64")).join("."); }
 function dec(s) { const [i,t,b]=s.split("."), d=crypto.createDecipheriv("aes-256-gcm",key,Buffer.from(i,"base64")); d.setAuthTag(Buffer.from(t,"base64")); return Buffer.concat([d.update(Buffer.from(b,"base64")),d.final()]).toString(); }
@@ -93,9 +96,17 @@ async function schema() {
  CREATE INDEX IF NOT EXISTS project_logs_slug ON project_logs(slug,id);
  CREATE TABLE IF NOT EXISTS dashboard_discord(owner_key TEXT PRIMARY KEY, discord_id TEXT UNIQUE NOT NULL, username TEXT, linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  ALTER TABLE accounts ADD COLUMN IF NOT EXISTS password_hash TEXT;
+ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS email TEXT;
+ CREATE UNIQUE INDEX IF NOT EXISTS accounts_email_unique ON accounts(lower(email)) WHERE email IS NOT NULL;
  CREATE TABLE IF NOT EXISTS project_data(slug TEXT NOT NULL, user_id TEXT NOT NULL, kind TEXT NOT NULL, data_enc TEXT NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(slug,user_id,kind));
  CREATE TABLE IF NOT EXISTS project_flags(id BIGSERIAL PRIMARY KEY, slug TEXT NOT NULL, account_id BIGINT, project_name TEXT, reason TEXT NOT NULL, affected INT NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'open', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  CREATE TABLE IF NOT EXISTS flag_reports(id BIGSERIAL PRIMARY KEY, flag_id BIGINT NOT NULL REFERENCES project_flags(id) ON DELETE CASCADE, contact TEXT, body TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ CREATE TABLE IF NOT EXISTS totp_secrets(kind TEXT NOT NULL, ident TEXT NOT NULL, secret_enc TEXT NOT NULL, recovery JSONB NOT NULL DEFAULT '[]', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(kind,ident));
+ CREATE TABLE IF NOT EXISTS drive_links(account_id BIGINT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE, email TEXT, refresh_enc TEXT NOT NULL, folders JSONB NOT NULL DEFAULT '{}', linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ CREATE TABLE IF NOT EXISTS subscriptions(subscription_id TEXT PRIMARY KEY, customer_id TEXT NOT NULL, account_id BIGINT REFERENCES accounts(id) ON DELETE SET NULL, tier INT NOT NULL DEFAULT 0, status TEXT NOT NULL, months INT, period_end BIGINT, trial_end BIGINT, cancel_at_period_end BOOLEAN NOT NULL DEFAULT false, email TEXT NOT NULL DEFAULT '', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ CREATE INDEX IF NOT EXISTS subscriptions_account ON subscriptions(account_id);
+ CREATE INDEX IF NOT EXISTS subscriptions_email ON subscriptions(lower(email));
+ CREATE TABLE IF NOT EXISTS receipts_sent(invoice_id TEXT PRIMARY KEY, sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  CREATE TABLE IF NOT EXISTS owner_identities(owner_key TEXT NOT NULL, provider TEXT NOT NULL, subject TEXT NOT NULL, name TEXT, linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(owner_key,provider), UNIQUE(provider,subject));
  CREATE TABLE IF NOT EXISTS account_identities(account_id BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, provider TEXT NOT NULL, subject TEXT NOT NULL, name TEXT, linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(provider,subject));
  CREATE INDEX IF NOT EXISTS account_identities_acct ON account_identities(account_id);
@@ -115,6 +126,18 @@ function deviceFingerprint(req) {
  return crypto.createHash("sha256").update(String(req.get("user-agent")||"unknown")).digest("hex");
 }
 // Only same-site paths inside the owner areas may be used as a post-login destination.
+// Finishes a dashboard login. If two-step login is on, the person goes to /login/2fa/<token> first.
+async function finishOwner(req,owner,method,next){
+ await new Promise((ok,no)=>req.session.regenerate(e=>e?no(e):ok()));
+ req.session.owner=owner.user;req.session.deviceFingerprint=deviceFingerprint(req);req.session.createdAt=Date.now();
+ await new Promise(ok=>req.session.save(ok));
+ await log("dashboard_login_success",{method,session_ttl_minutes:120,device_bound:true},owner.user);
+ return next||"/dashboard";
+}
+async function enterOwner(req,owner,method,next){
+ if(await twofa.active("owner",owner.user,owner.totp))return twofa.begin(req,{kind:"owner",ident:owner.user,label:owner.user,next,method});
+ return finishOwner(req,owner,method,next);
+}
 function safeNext(v){ v=String(v||""); return /^\/(dashboard|channels\/(?:@me|@dm|\d{17,20})|users\/profile)(?:[\/?#][^\\\s]*)?$/.test(v)&&!v.startsWith("//") ? v : ""; }
 function nextParam(req,sep="?"){ const n=req.method==="GET"?safeNext(req.originalUrl):""; return n?`${sep}next=${encodeURIComponent(n)}`:""; }
 function logged(req,res,next) {
@@ -309,11 +332,7 @@ async function dashDiscord(req,u,intent,t){
  if(!owner){ await log("dashboard_discord_login_failed",{discord_id:u.id}); return {status:403,title:"This Discord account is not linked",error:"No dashboard login is linked to this Discord account. Sign in with your username and password, then link Discord on your profile (Edit profile)."}; }
  await pool.query("UPDATE dashboard_discord SET access_token_enc=$2,refresh_token_enc=$3,expires_at=$4,username=$5 WHERE owner_key=$1",[owner.key,...tokenCols(t),name]).catch(()=>{});
  guildCache.delete(owner.key);
- await new Promise((ok,no)=>req.session.regenerate(e=>e?no(e):ok()));
- req.session.owner=owner.user;req.session.deviceFingerprint=deviceFingerprint(req);req.session.createdAt=Date.now();
- await new Promise(ok=>req.session.save(ok));
- await log("dashboard_login_success",{method:"discord",session_ttl_minutes:120,device_bound:true},owner.user);
- return {redirect:"/dashboard"};
+ return {redirect:await enterOwner(req,owner,"discord")};
 }
 // Google / X identities linked to dashboard (owner) logins.
 const ownerIdent={
@@ -322,17 +341,13 @@ const ownerIdent={
  async list(key){return (await pool.query("SELECT provider,name FROM owner_identities WHERE owner_key=$1",[key])).rows;},
  async link(key,provider,subject,name){try{await pool.query("INSERT INTO owner_identities(owner_key,provider,subject,name) VALUES($1,$2,$3,$4) ON CONFLICT(owner_key,provider) DO UPDATE SET subject=$3,name=$4,linked_at=NOW()",[key,provider,subject,name]);return true;}catch(e){if(e.code==="23505")return false;throw e;}},
  async unlink(key,provider){await pool.query("DELETE FROM owner_identities WHERE owner_key=$1 AND provider=$2",[key,provider]);},
- async login(req,owner,provider){
-  await new Promise((ok,no)=>req.session.regenerate(e=>e?no(e):ok()));
-  req.session.owner=owner.user;req.session.deviceFingerprint=deviceFingerprint(req);req.session.createdAt=Date.now();
-  await new Promise(ok=>req.session.save(ok));
-  await log("dashboard_login_success",{method:provider,session_ttl_minutes:120,device_bound:true},owner.user);
-  return "/dashboard";
- }
+ async login(req,owner,provider){return enterOwner(req,owner,provider);}
 };
-const pdata=require("./pdata")({pool,enc,dec,log,express,esc,site,origin:()=>{try{return new URL(process.env.REDIRECT_URI).origin;}catch{return "";}}});
-const projects=require("./projects")({pool,enc,dec,log,express,collect:pdata.collect,dataScopes:pdata.DATA_SCOPES}); projects.mountPublic({app,site}); // /projects/<name>/... and /projects/<user>/<name>/...
-const accounts=require("./accounts")({pool,enc,dec,log,express,projects,pdata,ownerIdent,site,esc,isOwnerName:u=>owners.some(o=>o.user.toLowerCase()===String(u).toLowerCase())}); accounts.mountPublic(app);
+const drive=require("./drive")({pool,enc,dec,log,esc,origin:()=>{try{return new URL(process.env.REDIRECT_URI).origin;}catch{return "";}},limited,save:req=>new Promise(ok=>req.session.save(ok))});
+const billing=require("./billing")({pool,log,esc,origin:()=>{try{return new URL(process.env.REDIRECT_URI).origin;}catch{return "";}},express,authPage:(...a)=>accounts.authPage(...a),limited});
+const pdata=require("./pdata")({pool,enc,dec,log,express,esc,site,drive,origin:()=>{try{return new URL(process.env.REDIRECT_URI).origin;}catch{return "";}}});
+const projects=require("./projects")({pool,enc,dec,log,express,collect:pdata.collect,dataScopes:pdata.DATA_SCOPES,limits:billing}); projects.mountPublic({app,site}); // /projects/<name>/... and /projects/<user>/<name>/...
+const accounts=require("./accounts")({pool,enc,dec,log,express,projects,pdata,ownerIdent,twofa,drive,billing,site,esc,isOwnerName:u=>owners.some(o=>o.user.toLowerCase()===String(u).toLowerCase())}); accounts.mountPublic(app);
 require("./auth")(app,{site,pool,enc,log,equal,verifyOrigin,optOutUser,dashDiscord,accountDiscord:accounts.accountDiscord,accountLogin:accounts.accountLogin,loginRedirect:LOGIN_REDIRECT}); // /auth, /auth/start, /oauth/callback
 
 const DISCORD_PATH=require("./icons").discord;
@@ -342,7 +357,7 @@ app.get("/login",(req,res)=>{
  if(req.session.owner)return res.redirect(safeNext(req.query.next)||"/dashboard");
  if(req.session.acct)return res.redirect(303,"/dashboard/"+req.session.acct.username);
  res.send(accounts.authPage({title:"AutoAuth Login",sub:"Log in",error:req.query.error?"Login failed. Check username and password.":"",top:accounts.discordLink(discordLoginUrl(),"Log in with Discord")+accounts.socialButtons("login"),
-  form:`<form method="post"><input type="hidden" name="next" value="${esc(safeNext(req.query.next))}"><label>Username</label><input name="username" autocomplete="username" required><label>Password</label><input type="password" name="password" autocomplete="current-password" required><label>Code (if 2FA is on)</label><input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="8"><button class="go">Log in</button></form>`,
+  form:`<form method="post"><input type="hidden" name="next" value="${esc(safeNext(req.query.next))}"><label>Username</label><input name="username" autocomplete="username" required><label>Password</label><input type="password" name="password" autocomplete="current-password" required><button class="go">Log in</button></form>`,
   foot:`<p class="muted" style="margin-bottom:0">Don't have an account? Create one.</p><a class="alt" href="/signup">Create an account</a>`}));
 });
 app.post("/login",async(req,res)=>{
@@ -350,22 +365,25 @@ app.post("/login",async(req,res)=>{
  if(a.until>Date.now())return res.status(429).send("Too many login attempts. Try again later.");
  const user=String(req.body.username||"").slice(0,200),pw=String(req.body.password||"").slice(0,500),lk=ip+"|"+user.trim().toLowerCase();
  if(security.lockout.blocked(lk))return res.status(429).send("Too many login attempts. Try again later.");
- let owner=owners.find(o=>equal(o.user.toLowerCase(),user.trim().toLowerCase())&&verify(pw,o.hash)); // usernames are not case sensitive
- let twoFaFailed=false;
- if(owner&&owner.totp&&!totpVerify(owner.totp,req.body.code)){twoFaFailed=true;owner=null;}
+ const owner=owners.find(o=>equal(o.user.toLowerCase(),user.trim().toLowerCase())&&verify(pw,o.hash)); // usernames are not case sensitive
  if(!owner){
-  const acct=twoFaFailed?null:await accounts.passwordLogin(user,pw);
+  const acct=await accounts.passwordLogin(user,pw);
   if(acct){attempts.delete(ip);security.lockout.clear(lk);const out=await accounts.start(req,acct);return res.redirect(303,out.redirect);}
   a.n++;if(a.n>=8){a.n=0;a.until=Date.now()+15*60*1000;}attempts.set(ip,a);security.lockout.fail(lk);
-  await log("dashboard_login_failed",{username:user.slice(0,80),ip,...(twoFaFailed?{reason:"two-step code"}:{})});
+  await log("dashboard_login_failed",{username:user.slice(0,80),ip});
   return res.redirect(303,"/login?error=1"+(safeNext(req.body.next)?"&next="+encodeURIComponent(safeNext(req.body.next)):""));
  }
- attempts.delete(ip);security.lockout.clear(lk);req.session.regenerate(async err=>{if(err)return res.status(500).send("Session error");req.session.owner=owner.user;req.session.deviceFingerprint=deviceFingerprint(req);req.session.createdAt=Date.now();await log("dashboard_login_success",{ip,session_ttl_minutes:120,device_bound:true},owner.user);res.redirect(303,safeNext(req.body.next)||"/dashboard");});
+ attempts.delete(ip);security.lockout.clear(lk);
+ try{res.redirect(303,await enterOwner(req,owner,"password",safeNext(req.body.next)));}catch(e){console.error(e);res.status(500).send("Session error");}
 });
+twofa.mountLogin(app,async(req,p)=>{
+ if(p.kind==="owner"){const o=owners.find(x=>x.user===p.ident);return o?finishOwner(req,o,p.method+"+2fa",p.next):"/login";}
+ return accounts.finishLogin(req,{id:p.ident,username:p.label});
+},p=>{const o=p.kind==="owner"?owners.find(x=>x.user===p.ident):null;return o?o.totp:"";});
 app.post("/dashboard/logout",logged,async(req,res)=>{const owner=req.session.owner;await log("dashboard_logout",{},owner);req.session.destroy(()=>res.redirect("/"));});
 
 dash=require("./dashboard")({app,express,pool,client,esc,log,logged,verifyOrigin,displayActor,displayDetail,ActivityType,
-  core:{projects,accounts,ownerIdent,linkedGuilds,unlinkDiscord,admins:owners,ADMIN_PERMS,OWNER_IDS,isExpired,addUserToGuild,addAllToGuild,kickFromGuild,optOutUser,sendDmTo,connectDiscord,discordState,shutdownBot}});
+  core:{projects,accounts,ownerIdent,twofa,linkedGuilds,unlinkDiscord,admins:owners,ADMIN_PERMS,OWNER_IDS,isExpired,addUserToGuild,addAllToGuild,kickFromGuild,optOutUser,sendDmTo,connectDiscord,discordState,shutdownBot}});
 
 // ---------- Discord events ----------
 const onInteraction=async i=>{

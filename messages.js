@@ -75,20 +75,13 @@ ${p.discord ? `<h3>Discord</h3><p>${discordHref(p.discord) ? `<a href="${esc(dis
     const unl = (action) => `<form method="post" action="${action}" style="margin:0"><button class="secondary" style="width:auto">Unlink</button></form>`;
     const row = (label, linked, link, unlink) => `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)"><div style="flex:1;min-width:120px"><b>${label}</b><div class="muted">${linked ? esc(linked) : "Not linked"}</div></div>${linked ? unlink : `<div style="width:230px;max-width:100%">${link}</div>`}</div>`;
     const rows = [row("Discord", dl && (dl.username || dl.discord_id), social.btn("discord", "Link Discord", { post: "/users/profile/discord-link", fields: { return: "/users/profile" } }), unl("/users/profile/discord-unlink"))]
-      .concat(["google", "x"].map((k) => { const i = ids.find((x) => x.provider === k); return row(social.PROV[k].label, i && (i.name || "Linked"), social.btn(k, `Link ${social.PROV[k].label}`, { href: `/auth/${k}/start?intent=olink` }), unl(`/users/profile/unlink/${k}`)); }));
-    const me = admins.find((a) => a.key === req.me), on = !!(me && me.totp);
-    const twoFa = `<div class="card" style="max-width:640px;margin-top:16px"><h2>Two-step login</h2><div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px"><div style="flex:1;min-width:120px"><b>${on ? "On" : "Off"}</b></div>${on ? "" : '<button type="button" class="secondary" id="tf-gen" style="width:auto">Set up</button>'}</div><div id="tf-out" style="display:none;margin-top:12px"></div></div>
-<script>document.addEventListener('DOMContentLoaded',function(){var b=document.getElementById('tf-gen');if(!b)return;b.addEventListener('click',async function(){var r=await fetch('/users/profile/2fa',{method:'POST'}),j=await r.json().catch(function(){return{};}),o=document.getElementById('tf-out');if(!r.ok){o.style.display='block';o.textContent=j.error||'Could not set up.';return;}o.style.display='block';o.innerHTML='';
-function line(l,v){var d=document.createElement('div');d.style.margin='6px 0';var s=document.createElement('b');s.textContent=l+' ';var c=document.createElement('code');c.style.wordBreak='break-all';c.textContent=v;d.appendChild(s);d.appendChild(c);o.appendChild(d);}
-line('Secret',j.secret);line('Authenticator link',j.uri);line('Render variable',j.variable+' = '+j.secret);});});</script>`;
+      .concat(["google", "x"].map((k) => { const i = ids.find((x) => x.provider === k); return row(social.PROV[k].label, i && (i.name || "Linked"), social.linkButton(k, "owner"), unl(`/users/profile/unlink/${k}`)); }));
+    const me = admins.find((a) => a.key === req.me), sm = me ? await c.twofa.summary("owner", me.user, me.totp) : { on: false };
+    const twoFa = c.twofa.card({ on: sm.on, env: sm.env, left: sm.left, base: "/users/profile/2fa" });
     return `<div class="card" style="max-width:640px;margin-top:16px"><h2>Linked accounts</h2>${rows.join("")}</div>` + twoFa;
   }
-  app.post("/users/profile/2fa", logged, owner, verifyOrigin, (req, res) => {
-    const me = admins.find((a) => a.key === req.me); if (!me) return res.status(404).json({ error: "Not found." });
-    if (me.totp) return res.status(400).json({ error: "Two-step login is already on." });
-    const secret = sec.newSecret();
-    res.set("Cache-Control", "no-store").json({ secret, uri: sec.otpauth(me.user, secret), variable: `DASHBOARD_ADMIN${me.key}_TOTP_SECRET` });
-  });
+  const tfh = c.twofa.handlers((req) => { const me = admins.find((a) => a.key === req.me); return me ? { kind: "owner", ident: me.user, label: me.user, env: me.totp } : null; }), tfJson = express.json({ limit: "2kb" });
+  for (const p of ["start", "enable", "disable"]) app.post("/users/profile/2fa/" + p, logged, owner, verifyOrigin, tfJson, tfh[p]);
   app.post("/users/profile/unlink/:provider", logged, owner, verifyOrigin, async (req, res) => {
     if (["google", "x"].includes(req.params.provider) && c.ownerIdent) { await c.ownerIdent.unlink(req.me, req.params.provider); req.session.flash = "Unlinked."; }
     res.redirect(303, "/users/profile");
