@@ -164,7 +164,7 @@ Use the URL in the matching Developer Portal field (Redirects, Interactions Endp
 
 ## Project accounts
 
-Anyone can sign up at `/signup`, with Discord or with a username and password (8+ characters). Discord sign-up uses the same `/login/callback` redirect as dashboard login, and the account takes its username from the Discord account (a number is added if it is taken). Accounts log in on the same `/login` page as the dashboard owners. After signing in they land on `/dashboard/<username>`, a dashboard like the main one without the bot controls:
+Anyone can sign up at `/signup`, with Discord, Google, X or an email and password (8+ characters). The site picks a public handle for the dashboard address from the email or account name. Discord sign-up uses the same `/login/callback` redirect as dashboard login, and the account takes its username from the Discord account (a number is added if it is taken). Accounts log in with their email on the same `/login` page as the dashboard owners. Dashboard owners can type the sign-in name set in Render, or the email saved on their profile (Messages > Profile > Edit). After signing in they land on `/dashboard/<username>`, a dashboard like the main one without the bot controls:
 
 - **Projects**: create, edit and delete up to 10 projects. Account projects are served at `/projects/<username>/<project-name>/<tab>`, for example `/projects/zed/my-bot/oauth/callback`.
 - **Project pages**: Setup (what to enter in the Developer Portal), Users (only when an OAuth project stores users) and Logs.
@@ -180,10 +180,10 @@ OAuth and invite projects list every Discord OAuth2 scope. Selecting one shows h
 
 ### Google and X sign-in
 
-Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, and/or `X_CLIENT_ID` and `X_CLIENT_SECRET`. A button appears on `/login`, `/signup` and the account profile only when its pair is set. Add these redirect URIs with each provider:
+Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, and/or `X_API_KEY` and `X_API_SECRET`. A button appears on `/login`, `/signup` and the account profile only when its pair is set. Add these redirect URIs with each provider:
 
 - Google (Cloud Console > Credentials > OAuth client, Web application): `https://<your domain>/auth/google/callback`
-- X (Developer Portal > your app > User authentication settings, OAuth 2.0, confidential client, scopes `users.read tweet.read`): `https://<your domain>/auth/x/callback`
+- X (console.x.com > your app > User authentication settings > turn on OAuth 1.0a, permission Read, "Request email" off): add `https://<your domain>/auth/x/callback` as a Callback URI. Use the app's **API Key and Secret** (the "Consumer Keys"), not the OAuth 2.0 Client ID. "Continue with X" sends people to `api.x.com/oauth/authenticate`, the same one-click screen as other sites, and only their X user id and @handle are kept.
 
 Signing up with a service uses the name on that account as the username. Accounts can also link Discord, Google and X from Profile, change their password, or delete the account (this removes their projects, stored users, data and support messages).
 
@@ -248,7 +248,20 @@ The rate limiter keeps its counts in memory, so they reset when the service rest
 - Receipts are emailed from `noreply@` your domain through Resend (`RESEND_API_KEY`, `RECEIPT_FROM`), once per paid invoice.
 - Tell the site which product is which tier: add metadata `tier` = `1`, `2` or `3` to each Stripe product (or price), or list the ids in `STRIPE_TIER_<n>_IDS`.
 - Stripe webhook: endpoint `https://YOUR-DOMAIN/stripe/webhook`, events `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`. Copy its signing secret into `STRIPE_WEBHOOK_SECRET`.
-- Two-step login: after the password or sign-in step, people go to `/login/2fa/<one-time token>`; the code box never appears on the normal login page.
+- Two-step login: after a password sign-in, people go to `/login%2Fa%<one-time token>` (`/login/a%<token>` with the slash encoded); the code box never appears on the normal login page. Signing in with Discord, Google or X skips this step, because those services have their own security.
+
+## Receipt email DNS (Resend, from noreply@autoauth.cfd)
+
+In resend.com > Domains > Add Domain, enter `autoauth.cfd`. Resend then shows the exact records; add them at the company that holds the DNS for the domain (the Cloudflare DNS tab if the domain is on Cloudflare; set every record to "DNS only"). They look like this:
+
+| Type | Name | Value | Notes |
+| --- | --- | --- | --- |
+| TXT | `resend._domainkey` | `p=MIGf...` (long key, copy it from Resend) | DKIM, unique to your account |
+| MX | `send` | `feedback-smtp.<region>.amazonses.com` | priority 10, the region is shown by Resend |
+| TXT | `send` | `v=spf1 include:amazonses.com ~all` | SPF |
+| TXT | `_dmarc` | `v=DMARC1; p=none; rua=mailto:support@autoauth.cfd` | DMARC, recommended |
+
+Then click Verify in Resend, make an API key, and set `RESEND_API_KEY` in Render. Receipts are only sent once the domain shows Verified. These records only cover sending; they do not create a mailbox, so replies to noreply@ go nowhere.
 
 ## Under construction
 

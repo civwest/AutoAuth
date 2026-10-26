@@ -167,14 +167,14 @@ function totpAt(secret, step) {
   return String(((h[o] & 0x7f) << 24 | h[o + 1] << 16 | h[o + 2] << 8 | h[o + 3]) % 1e6).padStart(6, "0");
 }
 const lastStep = new Map(); // secret -> last accepted step (a code works once)
-function totpVerify(secret, code, now = Date.now()) {
+function totpVerify(secret, code, now = Date.now(), consume = true) {
   code = String(code || "").replace(/\s/g, "");
   if (!/^\d{6}$/.test(code) || !b32decode(secret).length) return false;
   const cur = Math.floor(now / 30000);
   for (const d of [0, -1, 1]) {
     const step = cur + d;
     const ok = crypto.timingSafeEqual(Buffer.from(totpAt(secret, step)), Buffer.from(code));
-    if (ok) { if ((lastStep.get(secret) || 0) >= step) return false; lastStep.set(secret, step); return true; }
+    if (ok) { if (!consume) return true; if ((lastStep.get(secret) || 0) >= step) return false; lastStep.set(secret, step); return true; }
   }
   return false;
 }

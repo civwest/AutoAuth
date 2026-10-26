@@ -526,7 +526,7 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
   core.projects.mountUi({ app, logged, verifyOrigin, render, esc });
   core.accounts.mountAdmin({ app, logged, verifyOrigin, render });
   core.accounts.mountDash({ app, renderFor, verifyOrigin, sendDm: sendDmTo });
-  require("./messages")({ twofa: core.twofa, unlinkDiscord: core.unlinkDiscord, ownerIdent: core.ownerIdent, social: core.accounts.social, app, pool, express, logged, verifyOrigin, esc, render, admins, ADMIN_PERMS, permsOf });
+  require("./messages")({ log, twofa: core.twofa, unlinkDiscord: core.unlinkDiscord, ownerIdent: core.ownerIdent, social: core.accounts.social, app, pool, express, logged, verifyOrigin, esc, render, admins, ADMIN_PERMS, permsOf });
   Object.assign(dmsApi, require("./dms")({ app, pool, client, esc, logged, verifyOrigin, render, lk, ov }));
   return dmsApi;
 };

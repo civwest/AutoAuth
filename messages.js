@@ -9,7 +9,7 @@ const crypto = require("node:crypto");
 const sec = require("./security");
 
 module.exports = function mountMessages(c) {
-  const { app, pool, express, logged, verifyOrigin, esc, render, admins, ADMIN_PERMS } = c;
+  const { app, pool, express, logged, verifyOrigin, esc, render, admins, ADMIN_PERMS, log } = c;
   const OWNERS = admins.map((a) => ({ key: a.key, user: a.user })); // every dashboard user can message every other one
   const keyOf = (u) => (OWNERS.find((o) => o.user === u) || {}).key;
   const userOf = (k) => (OWNERS.find((o) => o.key === k) || {}).user;
@@ -30,9 +30,9 @@ module.exports = function mountMessages(c) {
 
   // ---------- profiles ----------
   async function getProfile(key) {
-    const r = await pool.query("SELECT display_name,pronouns,bio,status_emoji,status_text,accent,timezone,links,discord,(avatar IS NOT NULL) AS has_av,(banner IS NOT NULL) AS has_bn,updated_at FROM owner_profiles WHERE owner_key=$1", [key]);
+    const r = await pool.query("SELECT display_name,email,pronouns,bio,status_emoji,status_text,accent,timezone,links,discord,(avatar IS NOT NULL) AS has_av,(banner IS NOT NULL) AS has_bn,updated_at FROM owner_profiles WHERE owner_key=$1", [key]);
     const x = r.rows[0] || {};
-    return { key, user: userOf(key) || "", name: x.display_name || userOf(key) || "Owner", pronouns: x.pronouns || "", bio: x.bio || "", emoji: x.status_emoji || "", status: x.status_text || "",
+    return { key, user: userOf(key) || "", name: x.display_name || userOf(key) || "Owner", email: x.email || "", pronouns: x.pronouns || "", bio: x.bio || "", emoji: x.status_emoji || "", status: x.status_text || "",
       accent: x.accent || "#7289da", tz: x.timezone || "", links: x.links || "", discord: x.discord || "", hasAv: !!x.has_av, hasBn: !!x.has_bn, ver: x.updated_at ? new Date(x.updated_at).getTime() : 0 };
   }
   // A Discord entry may be a user ID, a discord.com/users or discord.gg link, or just a username (shown without a link).
@@ -78,10 +78,29 @@ ${p.discord ? `<h3>Discord</h3><p>${discordHref(p.discord) ? `<a href="${esc(dis
       .concat(["google", "x"].map((k) => { const i = ids.find((x) => x.provider === k); return row(social.PROV[k].label, i && (i.name || "Linked"), social.linkButton(k, "owner"), unl(`/users/profile/unlink/${k}`)); }));
     const me = admins.find((a) => a.key === req.me), sm = me ? await c.twofa.summary("owner", me.user, me.totp) : { on: false };
     const twoFa = c.twofa.card({ on: sm.on, env: sm.env, left: sm.left, base: "/users/profile/2fa" });
-    return `<div class="card" style="max-width:640px;margin-top:16px"><h2>Linked accounts</h2>${rows.join("")}</div>` + twoFa;
+    const reset = `<div class="card" style="max-width:640px;margin-top:16px;border-color:#7a2b35"><h2>Delete all project accounts</h2><p class="muted" style="margin-top:0">Deletes every sign-up account made on the site, with their projects, stored users, project logs, support chats, linked Google Drives and two-step login. Your own dashboard logins, the bot's authorized users and your own projects are not touched. This cannot be undone.</p><form method="post" action="/users/profile/reset-accounts"><label>Type <b>DELETE ALL ACCOUNTS</b> to confirm</label><input name="confirm" autocomplete="off" required><button class="danger" style="width:auto">Delete everything</button></form></div>`;
+    return `<div class="card" style="max-width:640px;margin-top:16px"><h2>Linked accounts</h2>${rows.join("")}</div>` + twoFa + reset;
   }
   const tfh = c.twofa.handlers((req) => { const me = admins.find((a) => a.key === req.me); return me ? { kind: "owner", ident: me.user, label: me.user, env: me.totp } : null; }), tfJson = express.json({ limit: "2kb" });
   for (const p of ["start", "enable", "disable"]) app.post("/users/profile/2fa/" + p, logged, owner, verifyOrigin, tfJson, tfh[p]);
+  app.post("/users/profile/reset-accounts", logged, owner, verifyOrigin, express.urlencoded({ extended: false, limit: "2kb" }), async (req, res) => {
+    if (String((req.body || {}).confirm || "").trim() !== "DELETE ALL ACCOUNTS") { req.session.flash = "Type DELETE ALL ACCOUNTS exactly to confirm."; return res.redirect(303, "/users/profile"); }
+    const cl = await pool.connect();
+    try {
+      await cl.query("BEGIN");
+      const slugs = (await cl.query("SELECT slug FROM side_projects WHERE owner_account IS NOT NULL")).rows.map((r) => r.slug);
+      if (slugs.length) for (const t of ["project_data", "side_project_users", "project_logs", "project_flags"]) await cl.query(`DELETE FROM ${t} WHERE slug=ANY($1)`, [slugs]);
+      await cl.query("DELETE FROM side_projects WHERE owner_account IS NOT NULL");
+      await cl.query("DELETE FROM totp_secrets WHERE kind='account'");
+      const n = (await cl.query("DELETE FROM accounts")).rowCount; // cascades: support chats, linked logins, Google Drive links; subscriptions keep their Stripe rows
+      await cl.query("COMMIT");
+      await cl.query(`DELETE FROM "session" WHERE sess::jsonb ? 'acct'`).catch(() => {});
+      await log("all_accounts_deleted", { accounts: n, projects: slugs.length }, req.session.owner);
+      req.session.flash = `Deleted ${n} account${n === 1 ? "" : "s"} and ${slugs.length} project${slugs.length === 1 ? "" : "s"}.`;
+    } catch (e) { await cl.query("ROLLBACK").catch(() => {}); console.error("reset accounts", e.message); req.session.flash = "Could not delete the accounts. Nothing was changed."; }
+    finally { cl.release(); }
+    res.redirect(303, "/users/profile");
+  });
   app.post("/users/profile/unlink/:provider", logged, owner, verifyOrigin, async (req, res) => {
     if (["google", "x"].includes(req.params.provider) && c.ownerIdent) { await c.ownerIdent.unlink(req.me, req.params.provider); req.session.flash = "Unlinked."; }
     res.redirect(303, "/users/profile");
@@ -95,7 +114,7 @@ ${p.discord ? `<h3>Discord</h3><p>${discordHref(p.discord) ? `<a href="${esc(dis
 <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button type="button" class="secondary" id="bn-pick">Upload banner</button><button type="button" class="secondary" id="bn-rm">Remove banner</button></div>
 <input type="file" id="bn-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
 <div style="display:flex;gap:16px;align-items:center;margin-top:18px"><div id="av-prev">${avatar(p, "lg")}</div><div><label style="margin:0">Profile picture</label><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px"><button type="button" class="secondary" id="pf-pick">Upload picture</button><button type="button" class="secondary" id="pf-rm">Remove picture</button></div><input type="file" id="pf-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden></div></div>
-<label>Display name</label><input id="pf-name" maxlength="32" value="${esc(p.name)}">
+<label>Email (you can sign in with it)</label><input id="pf-email" type="email" maxlength="200" autocomplete="email" value="${esc(p.email)}"><label>Display name</label><input id="pf-name" maxlength="32" value="${esc(p.name)}">
 <label>Pronouns</label><input id="pf-pro" maxlength="24" value="${esc(p.pronouns)}" placeholder="e.g. they/them">
 <label>Status</label><div style="display:flex;gap:8px"><input id="pf-emoji" maxlength="4" style="width:70px" value="${esc(p.emoji)}" placeholder="🙂"><input id="pf-status" maxlength="100" value="${esc(p.status)}" placeholder="What are you up to?"></div>
 <label>About me</label><textarea id="pf-bio" maxlength="400" style="min-height:90px">${esc(p.bio)}</textarea>
@@ -141,7 +160,7 @@ $('bn-file').addEventListener('change',function(){var f=this.files[0];this.value
 $('pf-rm').addEventListener('click',function(){av=null;rmAv=true;var p=$('av-prev');p.innerHTML='';var d=document.createElement('div');d.className='av lg';d.textContent=($('pf-name').value||'?').slice(0,1).toUpperCase();p.appendChild(d);});
 $('bn-rm').addEventListener('click',function(){bn=null;rmBn=true;$('bn-prev').style.background=$('pf-accent').value;});
 $('pf-save').addEventListener('click',async function(){var b=this;b.disabled=true;
- try{var r=await fetch('/users/profile/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('pf-name').value,pronouns:$('pf-pro').value,emoji:$('pf-emoji').value,status:$('pf-status').value,bio:$('pf-bio').value,tz:$('pf-tz').value,links:$('pf-links').value,accent:$('pf-accent').value,avatar:av,removeAvatar:rmAv,banner:bn,removeBanner:rmBn})});
+ try{var r=await fetch('/users/profile/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:$('pf-email').value,name:$('pf-name').value,pronouns:$('pf-pro').value,emoji:$('pf-emoji').value,status:$('pf-status').value,bio:$('pf-bio').value,tz:$('pf-tz').value,links:$('pf-links').value,accent:$('pf-accent').value,avatar:av,removeAvatar:rmAv,banner:bn,removeBanner:rmBn})});
   var j=await r.json().catch(function(){return {};});if(r.ok){location.href='/users/profile';}else{showMsg('Could not save',j.error||'Something went wrong.');b.disabled=false;}
  }catch(e){showMsg('Could not save',e.message);b.disabled=false;}});
 `;
@@ -152,6 +171,9 @@ $('pf-save').addEventListener('click',async function(){var b=this;b.disabled=tru
     let tz = t(b.tz, 64); if (tz) { try { new Intl.DateTimeFormat("en", { timeZone: tz }); } catch { tz = ""; } }
     const links = String(b.links || "").split("\n").map((l) => l.trim()).filter((l) => /^https:\/\/[^\s]{3,200}$/i.test(l)).slice(0, 3).join("\n");
     const name = t(b.name, 32) || userOf(req.me);
+    const email = t(b.email, 200).toLowerCase();
+    if (email && !/^[^\s@<>"']{1,64}@[^\s@<>"']{1,200}\.[^\s@<>"']{2,}$/.test(email)) return res.status(400).json({ error: "Enter a valid email address." });
+    if (email && (await pool.query("SELECT 1 FROM accounts WHERE lower(email)=$1", [email])).rows[0]) return res.status(400).json({ error: "That email is already used by an account." });
     
     let av = null, avType = null;
     if (typeof b.avatar === "string" && b.avatar) {
@@ -173,12 +195,13 @@ $('pf-save').addEventListener('click',async function(){var b=this;b.disabled=tru
       await pool.query(`INSERT INTO owner_profiles(owner_key,display_name,pronouns,bio,status_emoji,status_text,accent,timezone,links,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
         ON CONFLICT(owner_key) DO UPDATE SET display_name=$2,pronouns=$3,bio=$4,status_emoji=$5,status_text=$6,accent=$7,timezone=$8,links=$9,updated_at=NOW()`,
         [req.me, name, t(b.pronouns, 24), t(b.bio, 400), t(b.emoji, 8), t(b.status, 100), accent, tz, links]);
+      await pool.query("UPDATE owner_profiles SET email=$2 WHERE owner_key=$1", [req.me, email || null]);
       if (av) await pool.query("UPDATE owner_profiles SET avatar=$2, avatar_type=$3 WHERE owner_key=$1", [req.me, av, avType]);
       else if (b.removeAvatar) await pool.query("UPDATE owner_profiles SET avatar=NULL, avatar_type=NULL WHERE owner_key=$1", [req.me]);
       if (bnBuf) await pool.query("UPDATE owner_profiles SET banner=$2, banner_type='image/jpeg' WHERE owner_key=$1", [req.me, bnBuf]);
       else if (b.removeBanner) await pool.query("UPDATE owner_profiles SET banner=NULL, banner_type=NULL WHERE owner_key=$1", [req.me]);
       res.json({ ok: true });
-    } catch (e) { console.error("Profile save failed", e.message); res.status(500).json({ error: "Could not save your profile." }); }
+    } catch (e) { if (e.code === "23505") return res.status(400).json({ error: "That email is already used by another login." }); console.error("Profile save failed", e.message); res.status(500).json({ error: "Could not save your profile." }); }
   });
 
   // ---------- add a dashboard user ----------

@@ -16,17 +16,24 @@ const PROV = {
       return { subject: String(j.sub), name: j.name || (j.email ? j.email.split("@")[0] : ""), handle: j.email ? j.email.split("@")[0] : j.name };
     },
   },
-  x: {
-    label: "X", id: "X_CLIENT_ID", secret: "X_CLIENT_SECRET", logo: X_LOGO,
+  x: { // "Sign in with X" (OAuth 1.0a): request token -> api.x.com/oauth/authenticate -> access token. Needs the app's API Key and Secret.
+    label: "X", id: "X_API_KEY", secret: "X_API_SECRET", logo: X_LOGO, oauth1: true,
     style: "background:#000;color:#fff;border:1px solid #444",
-    auth: "https://x.com/i/oauth2/authorize", token: "https://api.x.com/2/oauth2/token", scope: "users.read tweet.read", basic: true,
-    async me(tok) {
-      const r = await fetch("https://api.x.com/2/users/me", { headers: { Authorization: "Bearer " + tok } }), j = await r.json();
-      if (!r.ok || !j.data || !j.data.id) throw new Error("X profile failed");
-      return { subject: String(j.data.id), name: j.data.name || j.data.username, handle: j.data.username };
-    },
   },
 };
+
+const enc1 = (v) => encodeURIComponent(String(v)).replace(/[!'()*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+const oauthSign = (method, url, params, secret, tokenSecret) => crypto.createHmac("sha1", `${enc1(secret)}&${enc1(tokenSecret || "")}`)
+  .update([method, enc1(url), enc1(Object.keys(params).sort().map((k) => `${enc1(k)}=${enc1(params[k])}`).join("&"))].join("&")).digest("base64");
+// Signs and sends an OAuth 1.0a request (HMAC-SHA1). extra = oauth_callback / oauth_verifier; tokenSecret is empty for the first step.
+async function oauth1(url, { key, secret, token, tokenSecret, extra }) {
+  const o = { oauth_consumer_key: key, oauth_nonce: crypto.randomBytes(16).toString("hex"), oauth_signature_method: "HMAC-SHA1", oauth_timestamp: String(Math.floor(Date.now() / 1000)), oauth_version: "1.0", ...(token ? { oauth_token: token } : {}), ...(extra || {}) };
+  o.oauth_signature = oauthSign("POST", url, o, secret, tokenSecret);
+  const r = await fetch(url, { method: "POST", headers: { Authorization: "OAuth " + Object.keys(o).sort().map((k) => `${enc1(k)}="${enc1(o[k])}"`).join(", ") }, signal: AbortSignal.timeout(10000) });
+  const text = await r.text(), p = Object.fromEntries(new URLSearchParams(text));
+  if (!r.ok) throw new Error(`X ${r.status}: ${text.slice(0, 200)}`);
+  return p;
+}
 
 module.exports = function createSocial(h) {
   const { ownerIdent, pool, log, esc, origin, clip, save, limited, slugName, freeUsername, createAccount, start, authPage } = h;
@@ -68,6 +75,15 @@ module.exports = function createSocial(h) {
       if (intent === "link" && !(req.session && req.session.acct)) return res.redirect(303, "/login");
       if (intent === "olink" && !(req.session && req.session.owner)) return res.redirect(303, "/login");
       if (limited("os:" + req.ip, 30, 600000)) return res.status(429).send("Too many attempts. Try again later.");
+      if (P.oauth1) { // X: ask for a request token, then send the person to X's own sign-in page
+        try {
+          const t = await oauth1("https://api.x.com/oauth/request_token", { key: process.env[P.id], secret: process.env[P.secret], extra: { oauth_callback: redirectUri(k) } });
+          if (!t.oauth_token || t.oauth_callback_confirmed !== "true") throw new Error("no request token");
+          req.session.oa = { state: t.oauth_token, secret: t.oauth_token_secret, intent, provider: k, until: Date.now() + 10 * 60 * 1000 };
+          await save(req);
+          return res.set("Cache-Control", "no-store").redirect(303, "https://api.x.com/oauth/authenticate?oauth_token=" + encodeURIComponent(t.oauth_token));
+        } catch (e) { await log("account_social_error", { provider: k, step: "request_token", error: String(e.message).slice(0, 200) }); return fail(res, "X would not start the sign-in. Check the API Key, API Secret and the callback URL in the X developer portal."); }
+      }
       const state = crypto.randomBytes(16).toString("hex"), verifier = b64(crypto.randomBytes(32));
       req.session.oa = { state, verifier, intent, provider: k, until: Date.now() + 10 * 60 * 1000 };
       await save(req);
@@ -82,17 +98,25 @@ module.exports = function createSocial(h) {
       res.set({ "Referrer-Policy": "no-referrer", "Cache-Control": "no-store" });
       const k = req.params.provider, P = PROV[k], o = req.session && req.session.oa;
       if (!P || !on(k)) return res.status(404).send("Not found");
-      if (!o || o.provider !== k || o.until < Date.now() || typeof req.query.state !== "string" || req.query.state !== o.state) return fail(res, "This sign-in expired or was opened twice. Please try again.");
+      if (!o || o.provider !== k || o.until < Date.now() || typeof (P.oauth1 ? req.query.oauth_token : req.query.state) !== "string" || (P.oauth1 ? req.query.oauth_token : req.query.state) !== o.state) return fail(res, "This sign-in expired or was opened twice. Please try again.");
       delete req.session.oa; await save(req);
-      if (req.query.error) return res.redirect(303, o.intent === "olink" ? "/users/profile" : o.intent === "link" && req.session.acct ? `/dashboard/${req.session.acct.username}/profile` : "/login");
-      if (typeof req.query.code !== "string" || !req.query.code) return fail(res, `${P.label} did not return a code.`);
+      if (req.query.error || req.query.denied) return res.redirect(303, o.intent === "olink" ? "/users/profile" : o.intent === "link" && req.session.acct ? `/dashboard/${req.session.acct.username}/profile` : "/login");
+      if (!P.oauth1 && (typeof req.query.code !== "string" || !req.query.code)) return fail(res, `${P.label} did not return a code.`);
+      if (P.oauth1 && (typeof req.query.oauth_verifier !== "string" || !req.query.oauth_verifier)) return fail(res, `${P.label} did not confirm the sign-in.`);
       try {
+        let me;
+        if (P.oauth1) {
+          const a = await oauth1("https://api.x.com/oauth/access_token", { key: process.env[P.id], secret: process.env[P.secret], token: o.state, tokenSecret: o.secret, extra: { oauth_verifier: req.query.oauth_verifier } });
+          if (!a.user_id) throw new Error("X returned no user");
+          me = { subject: String(a.user_id), name: a.screen_name, handle: a.screen_name };
+        } else {
         const body = new URLSearchParams({ grant_type: "authorization_code", code: req.query.code, redirect_uri: redirectUri(k), code_verifier: o.verifier, client_id: process.env[P.id] });
         const headers = { "Content-Type": "application/x-www-form-urlencoded" };
         if (P.basic) headers.Authorization = "Basic " + Buffer.from(`${process.env[P.id]}:${process.env[P.secret]}`).toString("base64"); else body.set("client_secret", process.env[P.secret]);
         const t = await (await fetch(P.token, { method: "POST", headers, body })).json();
         if (!t.access_token) { await log("account_social_failed", { provider: k, error: t.error }); return fail(res, `${P.label} rejected the sign-in.`); }
-        const me = await P.me(t.access_token);
+        me = await P.me(t.access_token);
+        }
         if (o.intent === "olink") {
           const key = req.session.owner && ownerIdent.keyOf(req); if (!key) return res.redirect(303, "/login");
           const okk = await ownerIdent.link(key, k, me.subject, clip(shown(k, me), 80));
@@ -109,15 +133,16 @@ module.exports = function createSocial(h) {
           req.session.flash = `${P.label} linked.`; await save(req);
           return res.redirect(303, `/dashboard/${s.username}/profile`);
         }
-        if (found) { const out = await start(req, found); return res.redirect(303, out.redirect); }
+        if (found) { const out = await start(req, found, true); return res.redirect(303, out.redirect); }
         if (o.intent === "login") return fail(res, `There is no account for this ${P.label} user yet.`, "/signup");
         const name = clip(me.name || me.handle, 60) || k;
         const acct = await createAccount({ username: await freeUsername(slugName(me.handle || me.name)), name });
         await pool.query("INSERT INTO account_identities(account_id,provider,subject,name) VALUES($1,$2,$3,$4)", [acct.id, k, me.subject, clip(shown(k, me), 80)]);
-        const out = await start(req, acct); res.redirect(303, out.redirect);
+        const out = await start(req, acct, true); res.redirect(303, out.redirect);
       } catch (e) { console.error(e); await log("account_social_error", { provider: k, error: e.message }); fail(res, "Something went wrong. Please try again."); }
     });
   }
 
   return { PROV, on, buttons, linkButton, btn, identities, mountPublic };
 };
+module.exports.oauthSign = oauthSign;

@@ -1,8 +1,8 @@
 "use strict";
 // Authenticator-app two-step login (TOTP, RFC 6238) for dashboard logins and project accounts.
 //   - setup: QR code + secret, the code is checked before 2FA turns on, 8 one-time recovery codes
-//   - login: after the password / Discord / Google / X step the person is sent to /login/2fa/<token>
-//     (the token is random, single-use, expires in 5 minutes and only works in the browser that started the login)
+//   - login: after the password step the person is sent to /login%2Fa%<token>
+//     (the page is /login%2Fa%<token>; the token is random, single-use, expires in 5 minutes and only works in the browser that started the login)
 const crypto = require("node:crypto");
 const { totpVerify, newSecret, otpauth } = require("./security");
 const { qrSvg } = require("./qr");
@@ -38,18 +38,20 @@ module.exports = function createTwoFa({ pool, enc, dec, esc, log, page, limited 
     const token = crypto.randomBytes(24).toString("base64url");
     req.session.p2 = { token, kind: p.kind, ident: String(p.ident), label: p.label, next: p.next || "", method: p.method || "login", exp: Date.now() + 5 * 60 * 1000, tries: 0 };
     await save(req);
-    return `/login/2fa/${token}`;
+    return `/login%2Fa%${token}`;
   }
-  const pending = (req) => { const p = req.session && req.session.p2; return p && p.exp > Date.now() && same(p.token, req.params.token) ? p : null; };
+  const pending = (req) => { const p = req.session && req.session.p2; return p && p.exp > Date.now() && same(p.token, req.params[0]) ? p : null; };
 
+  // One path segment: /login%2Fa%<32 character token>  (that is /login/a%<token> with the slash encoded)
+  const TWOFA_URL = /^\/login%2[Ff][aA]%([A-Za-z0-9_-]{32})$/; // matched on the raw path, so %2F stays inside one segment
   function mountLogin(app, finish, envFor = () => "") {
     const view = (res, error) => res.set({ "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex" }).send(page({
       title: "Two-step login", sub: "Enter the 6-digit code from your authenticator app", error: error || "", top: "",
       form: `<form method="post" autocomplete="off"><label>Code</label><input name="code" inputmode="numeric" autocomplete="one-time-code" autofocus required maxlength="20" placeholder="123456"><button class="go">Continue</button></form>`,
       foot: `<p class="muted">Lost your phone? Enter one of your recovery codes instead.</p><a class="alt" href="/login">Cancel</a>`,
     }).replace('<div class="or"><span></span>or<span></span></div>', ""));
-    app.get("/login/2fa/:token", (req, res) => { const p = pending(req); if (!p) return res.redirect(303, "/login"); view(res); });
-    app.post("/login/2fa/:token", async (req, res) => {
+    app.get(TWOFA_URL, (req, res) => { const p = pending(req); if (!p) return res.redirect(303, "/login"); view(res); });
+    app.post(TWOFA_URL, async (req, res) => {
       const p = pending(req); if (!p) return res.redirect(303, "/login");
       if (limited("2fa:" + req.ip, 30, 600000)) return res.status(429).send("Too many attempts. Try again later.");
       const rec = await active(p.kind, p.ident, envFor(p));
@@ -81,7 +83,7 @@ module.exports = function createTwoFa({ pool, enc, dec, esc, log, page, limited 
         const w = resolve(req), s = req.session.tfSetup;
         if (!w || !s || s.until < Date.now() || s.kind !== w.kind || s.ident !== String(w.ident)) return res.status(400).json({ error: "Start again: the setup expired." });
         if (limited("2fs:" + req.ip, 15, 600000)) return res.status(429).json({ error: "Too many attempts. Try again later." });
-        if (!totpVerify(s.secret, (req.body || {}).code)) return res.status(400).json({ error: "That code is not right. Check the newest code in your app." });
+        if (!totpVerify(s.secret, (req.body || {}).code, Date.now(), false)) return res.status(400).json({ error: "That code is not right. Check the newest code in your app." });
         const codes = Array.from({ length: 8 }, () => crypto.randomBytes(5).toString("hex").replace(/^(.{5})(.{5})$/, "$1-$2"));
         await pool.query("INSERT INTO totp_secrets(kind,ident,secret_enc,recovery) VALUES($1,$2,$3,$4) ON CONFLICT(kind,ident) DO UPDATE SET secret_enc=$3,recovery=$4,created_at=NOW()", [w.kind, String(w.ident), enc(s.secret), JSON.stringify(codes.map((c) => sha(normRecovery(c))))]);
         delete req.session.tfSetup; await save(req);

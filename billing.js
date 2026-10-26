@@ -109,6 +109,36 @@ module.exports = function createBilling({ pool, log, esc, origin, express, authP
     return { accountId, tier };
   }
 
+  // Looks the account's email up in Stripe and syncs what it finds, so plans work even if a webhook was missed or the
+  // buyer paid with another email. Throttled per account; force = true skips the wait (used right after checkout).
+  const lastLook = new Map();
+  async function refresh(accountId, email, force) {
+    if (!stripeKey() || !accountId) return false;
+    const gap = force ? 5000 : 5 * 60 * 1000, last = lastLook.get(String(accountId)) || 0;
+    if (Date.now() - last < gap) return false;
+    lastLook.set(String(accountId), Date.now());
+    try {
+      if (!email || !EMAIL.test(email)) return false;
+      const custs = await stripe("GET", "/customers", { email, limit: "10" });
+      let found = false;
+      for (const c of custs.data || []) {
+        const subs = await stripe("GET", "/subscriptions", { customer: c.id, status: "all", limit: "10" });
+        for (const s of subs.data || []) { await sync(s.id, { email, ref: "acct_" + accountId }); found = true; }
+      }
+      return found;
+    } catch (e) { await log("subscription_lookup_failed", { error: String(e.message).slice(0, 200) }); return false; }
+  }
+  // After checkout Stripe sends the buyer here; the session id ties the payment to the account that started it.
+  async function fromCheckout(accountId, sessionId) {
+    if (!/^cs_(live|test)_[A-Za-z0-9]{10,200}$/.test(String(sessionId || "")) || !stripeKey()) return false;
+    try {
+      const cs = await stripe("GET", "/checkout/sessions/" + sessionId);
+      if (cs.mode !== "subscription" || !cs.subscription || cs.client_reference_id !== "acct_" + accountId) return false;
+      await sync(typeof cs.subscription === "string" ? cs.subscription : cs.subscription.id, { ref: cs.client_reference_id, email: (cs.customer_details && cs.customer_details.email) || cs.customer_email });
+      return true;
+    } catch (e) { await log("subscription_checkout_lookup_failed", { error: String(e.message).slice(0, 200) }); return false; }
+  }
+
   // ---------- receipts (sent from noreply@ our own domain, through Resend) ----------
   const money = (cents, cur) => { try { return new Intl.NumberFormat("en-CA", { style: "currency", currency: String(cur || "cad").toUpperCase() }).format(Number(cents) / (["jpy", "krw"].includes(String(cur).toLowerCase()) ? 1 : 100)); } catch { return (Number(cents) / 100).toFixed(2) + " " + String(cur).toUpperCase(); } };
   const sender = () => String(process.env.RECEIPT_FROM || "AutoAuth <noreply@autoauth.cfd>");
@@ -221,7 +251,18 @@ render();})();</script>`;
   }
 
   function mountPublic(app) {
-    app.get("/subscribe", pricingPage);
+    app.get("/subscribe", async (req, res) => {
+      const s = req.session && req.session.acct;
+      if (s) { const a = (await pool.query("SELECT email FROM accounts WHERE id=$1", [s.id])).rows[0]; if (a) await refresh(s.id, a.email); }
+      return pricingPage(req, res);
+    });
+    app.get("/subscribe/success", async (req, res) => {
+      const s = req.session && req.session.acct; if (!s) return res.redirect(303, "/login");
+      const a = (await pool.query("SELECT email FROM accounts WHERE id=$1", [s.id])).rows[0];
+      let ok = await fromCheckout(s.id, req.query.session_id);
+      if (!ok && a) ok = await refresh(s.id, a.email, true);
+      res.set("Cache-Control", "no-store").redirect(303, ok ? `/dashboard/${s.username}/billing` : `/dashboard/${s.username}`);
+    });
 
     app.get("/subscribe/go", async (req, res) => {
       const tier = Number(req.query.tier), term = Number(req.query.term);
@@ -282,5 +323,5 @@ render();})();</script>`;
     });
   }
 
-  return { PLANS, PRICES, mountPublic, mountDash, limits, tierOf, canStore, usage, hasCustomer, claimByEmail, verifySig, handle, sendReceipt, sync, linkFor, EMAIL, subRow };
+  return { PLANS, PRICES, mountPublic, mountDash, limits, tierOf, canStore, usage, hasCustomer, claimByEmail, verifySig, handle, sendReceipt, sync, refresh, fromCheckout, linkFor, EMAIL, subRow };
 };

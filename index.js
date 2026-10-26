@@ -120,13 +120,16 @@ async function schema() {
  ALTER TABLE owner_profiles ADD COLUMN IF NOT EXISTS discord TEXT;
  ALTER TABLE owner_profiles ADD COLUMN IF NOT EXISTS banner BYTEA;
  ALTER TABLE owner_profiles ADD COLUMN IF NOT EXISTS banner_type TEXT;
+ ALTER TABLE owner_profiles ADD COLUMN IF NOT EXISTS email TEXT;
+ CREATE UNIQUE INDEX IF NOT EXISTS owner_profiles_email_uq ON owner_profiles(lower(email));
+ CREATE UNIQUE INDEX IF NOT EXISTS accounts_email_uq ON accounts(lower(email));
  CREATE TABLE IF NOT EXISTS owner_dms(id TEXT PRIMARY KEY, owner_a TEXT NOT NULL, owner_b TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(owner_a, owner_b));`);
 }
 function deviceFingerprint(req) {
  return crypto.createHash("sha256").update(String(req.get("user-agent")||"unknown")).digest("hex");
 }
 // Only same-site paths inside the owner areas may be used as a post-login destination.
-// Finishes a dashboard login. If two-step login is on, the person goes to /login/2fa/<token> first.
+// Finishes a dashboard login. If two-step login is on, the person goes to /login%2Fa%<token> first.
 async function finishOwner(req,owner,method,next){
  await new Promise((ok,no)=>req.session.regenerate(e=>e?no(e):ok()));
  req.session.owner=owner.user;req.session.deviceFingerprint=deviceFingerprint(req);req.session.createdAt=Date.now();
@@ -135,7 +138,7 @@ async function finishOwner(req,owner,method,next){
  return next||"/dashboard";
 }
 async function enterOwner(req,owner,method,next){
- if(await twofa.active("owner",owner.user,owner.totp))return twofa.begin(req,{kind:"owner",ident:owner.user,label:owner.user,next,method});
+ if(method==="password"&&await twofa.active("owner",owner.user,owner.totp))return twofa.begin(req,{kind:"owner",ident:owner.user,label:owner.user,next,method});
  return finishOwner(req,owner,method,next);
 }
 function safeNext(v){ v=String(v||""); return /^\/(dashboard|channels\/(?:@me|@dm|\d{17,20})|users\/profile)(?:[\/?#][^\\\s]*)?$/.test(v)&&!v.startsWith("//") ? v : ""; }
@@ -356,8 +359,8 @@ app.get("/dashboard/login",(req,res)=>res.redirect(302,"/login"));
 app.get("/login",(req,res)=>{
  if(req.session.owner)return res.redirect(safeNext(req.query.next)||"/dashboard");
  if(req.session.acct)return res.redirect(303,"/dashboard/"+req.session.acct.username);
- res.send(accounts.authPage({title:"AutoAuth Login",sub:"Log in",error:req.query.error?"Login failed. Check username and password.":"",top:accounts.discordLink(discordLoginUrl(),"Log in with Discord")+accounts.socialButtons("login"),
-  form:`<form method="post"><input type="hidden" name="next" value="${esc(safeNext(req.query.next))}"><label>Username</label><input name="username" autocomplete="username" required><label>Password</label><input type="password" name="password" autocomplete="current-password" required><button class="go">Log in</button></form>`,
+ res.send(accounts.authPage({title:"AutoAuth Login",sub:"Log in",error:req.query.error?"Login failed. Check your email and password.":"",top:accounts.discordLink(discordLoginUrl(),"Log in with Discord")+accounts.socialButtons("login"),
+  form:`<form method="post"><input type="hidden" name="next" value="${esc(safeNext(req.query.next))}"><label>Email</label><input type="email" name="username" autocomplete="email" required><label>Password</label><input type="password" name="password" autocomplete="current-password" required><button class="go">Log in</button></form>`,
   foot:`<p class="muted" style="margin-bottom:0">Don't have an account? Create one.</p><a class="alt" href="/signup">Create an account</a>`}));
 });
 app.post("/login",async(req,res)=>{
@@ -365,7 +368,11 @@ app.post("/login",async(req,res)=>{
  if(a.until>Date.now())return res.status(429).send("Too many login attempts. Try again later.");
  const user=String(req.body.username||"").slice(0,200),pw=String(req.body.password||"").slice(0,500),lk=ip+"|"+user.trim().toLowerCase();
  if(security.lockout.blocked(lk))return res.status(429).send("Too many login attempts. Try again later.");
- const owner=owners.find(o=>equal(o.user.toLowerCase(),user.trim().toLowerCase())&&verify(pw,o.hash)); // usernames are not case sensitive
+ let owner=owners.find(o=>equal(o.user.toLowerCase(),user.trim().toLowerCase())&&verify(pw,o.hash)); // the sign-in name set in Render is not case sensitive
+ if(!owner&&user.includes("@")){ // an owner can also sign in with the email saved on their profile
+  const pe=(await pool.query("SELECT owner_key FROM owner_profiles WHERE lower(email)=$1",[user.trim().toLowerCase()])).rows[0];
+  const o=pe&&owners.find(x=>x.key===pe.owner_key); if(o&&verify(pw,o.hash))owner=o;
+ }
  if(!owner){
   const acct=await accounts.passwordLogin(user,pw);
   if(acct){attempts.delete(ip);security.lockout.clear(lk);const out=await accounts.start(req,acct);return res.redirect(303,out.redirect);}

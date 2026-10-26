@@ -227,3 +227,19 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 - Authenticator-app two-step login with QR setup and recovery codes for dashboard logins and project accounts; the code is asked on `/login/2fa/<token>` only when 2FA is on.
 - The X and Google link buttons use the same flow on both dashboards.
 - Permissions that need Discord's own approval are no longer offered; a "Permissions missing?" link at the bottom of the list explains why.
+
+## v1.6.2
+- Fixed signing in going to `undefined` for accounts without two-step login, on password, Discord, Google and X sign-in.
+- Fixed the code used to turn on two-step login being refused at the first login.
+- Two-step login is only asked after a password sign-in; Discord, Google and X sign-ins skip it. The code page is `/login%2Fa%<token>`.
+- Sign in and sign up with an email, not a username. Dashboard owners can add an email on their profile and sign in with it.
+- X sign-in now uses X's "Sign in with X" flow (`api.x.com/oauth/authenticate`) with the API Key and Secret. Replaces `X_CLIENT_ID` and `X_CLIENT_SECRET` with `X_API_KEY` and `X_API_SECRET`.
+- Plans sync from Stripe by email and from the checkout return page, so they no longer depend only on the webhook. The Billing tab appears as soon as a subscription is found.
+- Owner-only button on the profile page to delete all project accounts and their data.
+- README: DNS records for receipt email.
+
+## v1.6.3
+- The two-step code page address is now `/login%2Fa%<token>` (`/login/a%<token>` with the slash encoded).
+
+## v1.6.4
+- The two-step code page address is now `/login%2Fa%<token>` (no `25`).

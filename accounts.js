@@ -44,8 +44,8 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
   }
   const hashPw = (pw) => { const salt = crypto.randomBytes(16); return `scrypt$${salt.toString("hex")}$${crypto.scryptSync(pw, salt, 32, { N: 16384, r: 8, p: 1 }).toString("hex")}`; };
   const checkPw = (pw, h) => { try { const [alg, salt, exp] = String(h).split("$"); if (alg !== "scrypt") return false; const got = crypto.scryptSync(pw, Buffer.from(salt, "hex"), 32, { N: 16384, r: 8, p: 1 }); return crypto.timingSafeEqual(got, Buffer.from(exp, "hex")); } catch { return false; } };
-  async function createAccount({ username, name, discordId, avatar, passwordHash }) {
-    const r = await pool.query("INSERT INTO accounts(username,display_name,discord_id,discord_name,avatar,password_hash) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,username", [username, name, discordId || null, discordId ? name : null, avatar || null, passwordHash || null]);
+  async function createAccount({ username, name, discordId, avatar, passwordHash, email }) {
+    const r = await pool.query("INSERT INTO accounts(username,display_name,discord_id,discord_name,avatar,password_hash,email) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id,username", [username, name, discordId || null, discordId ? name : null, avatar || null, passwordHash || null, email ? String(email).trim().toLowerCase() : null]);
     await pool.query("INSERT INTO support_messages(account_id,from_admin,sender,body,read_admin) VALUES($1,true,'Support',$2,true)", [r.rows[0].id, "Welcome. Message us here if you need help with a project."]);
     await log("account_created", { username });
     return r.rows[0];
@@ -63,20 +63,20 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
       req.session.flash = "Discord linked."; delete req.session.acctIntent; await save(req);
       return { redirect: back };
     }
-    if (row) return start(req, row);
+    if (row) return start(req, row, true);
     if (req.session.acctIntent === "login") return { status: 404, title: "No account found", error: "There is no account for this Discord user yet.", back: "/signup" };
     const acct = await createAccount({ username: await freeUsername(slugName(u.username || u.global_name)), name, discordId: u.id, avatar });
-    return start(req, acct);
+    return start(req, acct, true);
   }
   // Used by the login page's Discord button.
   async function accountLogin(req, u) {
     const row = (await pool.query("SELECT id,username FROM accounts WHERE discord_id=$1", [u.id])).rows[0];
-    return row ? start(req, row) : null;
+    return row ? start(req, row, true) : null;
   }
-  // Signs in. With two-step login on, the person is sent to /login/2fa/<token> first.
-  async function start(req, row) {
-    if (twofa && (await twofa.active("account", String(row.id)))) return { redirect: await twofa.begin(req, { kind: "account", ident: String(row.id), label: row.username, method: "account" }) };
-    return finishLogin(req, row);
+  // Signs in. With two-step login on, the person is sent to /login%2Fa%<token> first.
+  async function start(req, row, viaConnection) {
+    if (!viaConnection && twofa && (await twofa.active("account", String(row.id)))) return { redirect: await twofa.begin(req, { kind: "account", ident: String(row.id), label: row.username, method: "account" }) };
+    return { redirect: await finishLogin(req, row) };
   }
   async function finishLogin(req, row) {
     await regen(req);
@@ -86,8 +86,8 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
     await pool.query("UPDATE accounts SET last_login=NOW() WHERE id=$1", [row.id]).catch(() => {});
     return "/dashboard/" + row.username;
   }
-  async function passwordLogin(username, pw) {
-    const r = (await pool.query("SELECT id,username,password_hash FROM accounts WHERE username=$1", [String(username).trim().toLowerCase()])).rows[0];
+  async function passwordLogin(email, pw) {
+    const r = (await pool.query("SELECT id,username,password_hash FROM accounts WHERE lower(email)=$1", [String(email).trim().toLowerCase()])).rows[0];
     if (!r || !r.password_hash) { checkPw(pw, "scrypt$00$00"); return null; }
     return checkPw(pw, r.password_hash) ? r : null;
   }
@@ -102,19 +102,22 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
     pdata.mountPublic(app);
     app.get("/signup", (req, res) => {
       if (req.session && req.session.acct) return res.redirect(303, "/dashboard/" + req.session.acct.username);
-      const e = { taken: "That username is taken.", name: "Use 3 to 20 letters, numbers or dashes.", pw: "Use a stronger password of at least 8 characters.", rate: "Too many attempts. Try again later." }[req.query.e] || "";
+      const e = { taken: "An account with that email already exists. Log in instead.", name: "Enter a valid email address.", pw: "Use a stronger password of at least 8 characters.", rate: "Too many attempts. Try again later." }[req.query.e] || "";
       res.set("Cache-Control", "no-store").send(authPage({ title: "AutoAuth Sign up", sub: "Create an account", error: e, top: discordPost("signup", "Sign up with Discord") + socialButtons("signup"),
-        form: `<form method="post" action="/signup"><label>Username</label><input name="username" maxlength="20" autocomplete="username" required><label>Password</label><input type="password" name="password" minlength="8" autocomplete="new-password" required><input name="hp_field" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0"><button class="go">Create account</button></form>`,
+        form: `<form method="post" action="/signup"><label>Email</label><input type="email" name="email" maxlength="200" autocomplete="email" required><label>Password</label><input type="password" name="password" minlength="8" autocomplete="new-password" required><input name="hp_field" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0"><button class="go">Create account</button></form>`,
         foot: `<p class="muted">Already have an account? <a href="/login" style="color:#9db4ff">Log in</a></p><p class="muted">Project data is encrypted. AutoAuth's admins cannot read it or open your dashboard.</p>` }));
     });
     app.post("/signup", async (req, res) => {
       if (limited("sp:" + req.ip, 10, 600000)) return res.redirect(303, "/signup?e=rate");
-      const u = clip((req.body || {}).username, 20).toLowerCase(), pw = String((req.body || {}).password || "");
-      if (!NAME.test(u) || RESERVED.has(u) || isOwnerName(u)) return res.redirect(303, "/signup?e=name");
+      const email = clip((req.body || {}).email, 200).toLowerCase(), pw = String((req.body || {}).password || "");
       if ((req.body || {}).hp_field) return res.redirect(303, "/signup?e=rate"); // hidden field only bots fill in
-      if (pw.length < 8 || pw.length > 200 || weakPassword(pw, u)) return res.redirect(303, "/signup?e=pw");
+      if (!/^[^\s@<>"']{1,64}@[^\s@<>"']{1,200}\.[^\s@<>"']{2,}$/.test(email)) return res.redirect(303, "/signup?e=name");
+      if (pw.length < 8 || pw.length > 200 || weakPassword(pw, email.split("@")[0])) return res.redirect(303, "/signup?e=pw");
       try {
-        const acct = await createAccount({ username: u, name: u, passwordHash: hashPw(pw) });
+        if ((await pool.query("SELECT 1 FROM accounts WHERE lower(email)=$1", [email])).rows[0]) return res.redirect(303, "/signup?e=taken");
+        const handle = await freeUsername(slugName(email.split("@")[0]));
+        const acct = await createAccount({ username: handle, name: handle, passwordHash: hashPw(pw), email });
+        await billing.claimByEmail(acct.id, email);
         const out = await start(req, acct); res.redirect(303, out.redirect);
       } catch (e) { if (e.code === "23505") return res.redirect(303, "/signup?e=taken"); console.error(e); res.status(500).send("Something went wrong."); }
     });
@@ -130,6 +133,7 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
     if (req.params.u && req.params.u !== s.username) return res.redirect(303, "/dashboard/" + s.username);
     const a = (await pool.query("SELECT id,username,display_name,discord_name,avatar,email FROM accounts WHERE id=$1", [s.id])).rows[0];
     if (!a) return req.session.destroy(() => res.redirect(303, "/signup"));
+    if (!(await billing.hasCustomer(a.id)) && a.email) await billing.refresh(a.id, a.email);
     req.billing = await billing.hasCustomer(a.id);
     req.unread = (await pool.query("SELECT COUNT(*)::int n FROM support_messages WHERE account_id=$1 AND from_admin AND NOT read_user", [a.id])).rows[0].n;
     req.acct = a; next();
