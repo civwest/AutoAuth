@@ -26,6 +26,16 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 const svg = (name, label) =>
   `<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" role="img" aria-label="${label}"><path d="${icons[name]}"/></svg>`;
 
+const FOOTER_CSS = `footer{background:#000;color:#fff;padding:64px 28px 48px;min-height:260px;display:grid;grid-template-columns:1fr 1fr auto;gap:48px;align-items:start}
+.fcol h3{margin:0 0 14px;font-size:20px;font-weight:700;color:#fff}.fcol p,.fcol li{color:#d1d5db;font-size:15px;line-height:1.7;margin:0 0 10px}.fcol ul{margin:0;padding:0;list-style:none}.fcol code{background:#1f2937;color:#fff;padding:2px 6px;border-radius:5px;font-size:.92em}
+.foot{text-align:right}
+.foot h3{margin:0 0 16px;font-size:20px;font-weight:700;color:#fff}
+.icons{display:flex;justify-content:flex-end;gap:20px;margin-bottom:26px}
+.icons a{color:#fff;display:inline-flex;transition:opacity .15s,transform .15s}
+.icons a:hover{opacity:.7;transform:translateY(-2px)}
+.legal a{display:block;color:#9ca3af;text-decoration:underline;font-size:14px;line-height:1.9}
+.legal a:hover{color:#d1d5db}`;
+
 const CSS = `
 *{box-sizing:border-box}html{scroll-behavior:smooth;scrollbar-gutter:stable}
 html.lock,html:has(dialog[open]){overflow:hidden}
@@ -70,15 +80,7 @@ dialog.dlg h2{margin:0 0 8px;font-size:22px}
 .agree-list{margin:10px 0 14px;padding-left:20px}.agree-list li{margin:6px 0}
 .chk{display:flex;gap:10px;align-items:flex-start;margin:14px 0;font-size:14px}.chk input{margin-top:4px;width:18px;height:18px}
 .linkbtn{background:none;border:0;color:#2563eb;cursor:pointer;font:inherit;text-decoration:underline;padding:0}
-footer{background:#000;color:#fff;padding:64px 28px 48px;min-height:260px;display:grid;grid-template-columns:1fr 1fr auto;gap:48px;align-items:start}
-.fcol h3{margin:0 0 14px;font-size:20px;font-weight:700;color:#fff}.fcol p,.fcol li{color:#d1d5db;font-size:15px;line-height:1.7;margin:0 0 10px}.fcol ul{margin:0;padding:0;list-style:none}.fcol code{background:#1f2937;color:#fff;padding:2px 6px;border-radius:5px;font-size:.92em}
-.foot{text-align:right}
-.foot h3{margin:0 0 16px;font-size:20px;font-weight:700;color:#fff}
-.icons{display:flex;justify-content:flex-end;gap:20px;margin-bottom:26px}
-.icons a{color:#fff;display:inline-flex;transition:opacity .15s,transform .15s}
-.icons a:hover{opacity:.7;transform:translateY(-2px)}
-.legal a{display:block;color:#9ca3af;text-decoration:underline;font-size:14px;line-height:1.9}
-.legal a:hover{color:#d1d5db}
+${FOOTER_CSS}
 @media(max-width:860px){footer{grid-template-columns:1fr;gap:36px}.foot{text-align:left}.icons{justify-content:flex-start}.authgrid{grid-template-columns:1fr}}
 @media(max-width:600px){
 body{font-size:15.5px}.nav{padding:0 8px;gap:2px}.nav .grp{gap:2px}.nav a.tab{padding:8px 8px;font-size:14px}.nav a.tab.login{padding:8px 12px}.nav .logo{width:30px;height:30px;margin-left:4px}
@@ -100,13 +102,36 @@ function goExternal(){window.open(extUrl,'_blank','noopener,noreferrer');closeDl
 
 let probe = () => ({ offline: false });
 const SUPPORT_EMAIL = (() => { const e = String(process.env.SUPPORT_EMAIL || "").trim(); if (/^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/.test(e)) return e; try { return "support@" + new URL(process.env.REDIRECT_URI).hostname.replace(/^www\./, ""); } catch { return ""; } })();
-const UNDER_CONSTRUCTION = "The controls for some project permissions";
 function notices(active) {
   let out = "";
   if (probe().offline) out += `<div class="banner" role="status" style="margin-top:0"><b>Offline.</b> The bot is not running right now.</div>`;
-  if (active === "home") out += `<div class="notice"><b>Under construction:</b> ${UNDER_CONSTRUCTION} are not built yet.</div>`;
   return out;
 }
+
+const footerHtml = () => `<footer>
+<div class="fcol"><h3>About AutoAuth</h3>
+<p>AutoAuth is a Discord authorization bot and website. Members approve it once through Discord's OAuth2 sign-in, choosing server joins, direct messages or both. With that approval, server administrators and the owners can add them to servers that run the bot, and the owners can message them through the bot.</p>
+<p>We store your Discord ID, username and encrypted tokens for only what you approved. Nothing happens without your approval, and you can opt out any time on the <a href="/optout">opt-out page</a> or with <code>/optout</code> in Discord. <a href="/info" style="text-decoration:underline">Read the full details</a>.</p>
+<p style="font-size:13px;color:#9ca3af">AutoAuth is an independent project run by ${OPERATOR}. It is not affiliated with, endorsed by, or sponsored by Discord Inc.</p></div>
+<div class="fcol"><h3>What it can do</h3>
+<ul>
+<li><code>/auth</code> Open the authorization page.</li>
+<li><code>/optout</code> Opt out of servers, DMs or everything, and delete your data.</li>
+<li><code>/addusers</code> Admins: add every authorized member to the server.</li>
+<li><code>/adduser</code> Admins: add one authorized member by user ID.</li>
+</ul></div>
+<div class="foot">
+<h3>Follow the creator</h3>
+<div class="icons">
+${LINKS.tiktok ? `<a href="${LINKS.tiktok}" target="_blank" rel="noopener" title="TikTok" aria-label="TikTok">${svg("tiktok", "TikTok")}</a>` : ""}
+${LINKS.youtube ? `<a href="${LINKS.youtube}" target="_blank" rel="noopener" title="YouTube" aria-label="YouTube">${svg("youtube", "YouTube")}</a>` : ""}
+${LINKS.x ? `<a href="${LINKS.x}" target="_blank" rel="noopener" title="X" aria-label="X">${svg("x", "X")}</a>` : ""}
+${LINKS.twitch ? `<a href="${LINKS.twitch}" target="_blank" rel="noopener" title="Twitch" aria-label="Twitch">${svg("twitch", "Twitch")}</a>` : ""}
+${LINKS.discord ? `<a href="${LINKS.discord}" target="_blank" rel="noopener" title="Join the Discord" aria-label="Join the Discord">${svg("discord", "Join the Discord")}</a>` : ""}
+</div>
+${SUPPORT_EMAIL ? `<p style="margin:14px 0 0"><a href="mailto:${SUPPORT_EMAIL}" style="color:#fff;text-decoration:underline">${SUPPORT_EMAIL}</a></p>` : ""}
+<div class="legal"><a href="/terms-of-service">Terms of Service</a><a href="/privacy-policy">Privacy Policy</a></div>
+</div></footer>`;
 
 function layout({ title, active, gap = "72vh", body }) {
   const nav = (href, label, key) =>
@@ -130,30 +155,7 @@ ${/^[\w-]{20,100}$/.test(process.env.GOOGLE_SITE_VERIFICATION || "") ? `<meta na
 <dialog class="dlg" id="leave"><h2>You're leaving the site</h2>
 <p>This link leads to an external website. Are you sure you want to open it?</p>
 <div class="btns"><button type="button" class="btn green" onclick="goExternal()">Yes, do it!</button><button type="button" class="btn blue" onclick="closeDlg('leave')">No, I want to stay.</button></div></dialog>
-<footer>
-<div class="fcol"><h3>About AutoAuth</h3>
-<p>AutoAuth is a Discord authorization bot and website. Members approve it once through Discord's OAuth2 sign-in, choosing server joins, direct messages or both. With that approval, server administrators and the owners can add them to servers that run the bot, and the owners can message them through the bot.</p>
-<p>We store your Discord ID, username and encrypted tokens for only what you approved. Nothing happens without your approval, and you can opt out any time on the <a href="/optout">opt-out page</a> or with <code>/optout</code> in Discord. <a href="/info" style="text-decoration:underline">Read the full details</a>.</p>
-<p style="font-size:13px;color:#9ca3af">AutoAuth is an independent project run by ${OPERATOR}. It is not affiliated with, endorsed by, or sponsored by Discord Inc.</p></div>
-<div class="fcol"><h3>What it can do</h3>
-<ul>
-<li><code>/auth</code> Open the authorization page.</li>
-<li><code>/optout</code> Opt out of servers, DMs or everything, and delete your data.</li>
-<li><code>/addusers</code> Admins: add every authorized member to the server.</li>
-<li><code>/adduser</code> Admins: add one authorized member by user ID.</li>
-</ul></div>
-<div class="foot">
-<h3>Follow the creator</h3>
-<div class="icons">
-${LINKS.tiktok ? `<a href="${LINKS.tiktok}" target="_blank" rel="noopener" title="TikTok" aria-label="TikTok">${svg("tiktok", "TikTok")}</a>` : ""}
-${LINKS.youtube ? `<a href="${LINKS.youtube}" target="_blank" rel="noopener" title="YouTube" aria-label="YouTube">${svg("youtube", "YouTube")}</a>` : ""}
-${LINKS.x ? `<a href="${LINKS.x}" target="_blank" rel="noopener" title="X" aria-label="X">${svg("x", "X")}</a>` : ""}
-${LINKS.twitch ? `<a href="${LINKS.twitch}" target="_blank" rel="noopener" title="Twitch" aria-label="Twitch">${svg("twitch", "Twitch")}</a>` : ""}
-${LINKS.discord ? `<a href="${LINKS.discord}" target="_blank" rel="noopener" title="Join the Discord" aria-label="Join the Discord">${svg("discord", "Join the Discord")}</a>` : ""}
-</div>
-${SUPPORT_EMAIL ? `<p style="margin:14px 0 0"><a href="mailto:${SUPPORT_EMAIL}" style="color:#fff;text-decoration:underline">${SUPPORT_EMAIL}</a></p>` : ""}
-<div class="legal"><a href="/terms-of-service">Terms of Service</a><a href="/privacy-policy">Privacy Policy</a></div>
-</div></footer><script>${CLIENT_JS}</script></body></html>`;
+${footerHtml()}<script>${CLIENT_JS}</script></body></html>`;
 }
 
 const homeBody = (online, stats, paused) => `
@@ -330,3 +332,6 @@ module.exports = function mountSite(app, client, getStats, getState) {
     res.send(layout({ title: "Privacy Policy | AutoAuth", gap: "20vh", body: privacyBody })));
   return { page, LINKS };
 };
+
+module.exports.footerHtml = footerHtml;
+module.exports.FOOTER_CSS = FOOTER_CSS + "\n@media(max-width:860px){footer{grid-template-columns:1fr;gap:36px}.foot{text-align:left}.icons{justify-content:flex-start}}@media(max-width:600px){footer{padding:44px 18px 32px}}";

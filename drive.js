@@ -90,6 +90,14 @@ module.exports = function createDrive({ pool, enc, dec, log, esc, origin, limite
 
   // ---- connect flow (project accounts) ----
   function mountPublic(app, { authPage }) {
+    app.get("/drive-logo", (req, res) => {
+      const fs = require("node:fs"), path = require("node:path");
+      for (const [file, type] of [["google-drive.svg", "image/svg+xml"], ["google-drive.png", "image/png"]]) {
+        const f = path.join(__dirname, "public", file);
+        if (fs.existsSync(f)) return res.type(type).set("Cache-Control", "public, max-age=86400").send(fs.readFileSync(f));
+      }
+      res.status(404).end();
+    });
     const fail = (res, msg, back) => res.status(400).set("Cache-Control", "no-store").send(authPage({ title: "Google Drive", sub: "Could not connect Google Drive", error: msg, top: "", form: "", foot: `<a class="alt" href="${back}">Back</a>` }).replace('<div class="or"><span></span>or<span></span></div>', ""));
     // Who is connecting: a project account, or a dashboard login (the main dashboard's own projects).
     const who = (req) => {
@@ -133,11 +141,14 @@ module.exports = function createDrive({ pool, enc, dec, log, esc, origin, limite
     });
   }
 
+  // Google's own Drive logo is not drawn here. Put the official file at ./public/google-drive.png (or .svg) (from Google's brand resources) and the button uses it; until then a neutral cloud icon is shown.
+  const FALLBACK_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#5f6368" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18a4 4 0 0 1-.6-7.96A5.5 5.5 0 0 1 17 8.6 4.7 4.7 0 0 1 17.5 18z"/></svg>';
+  const BTN_CSS = '<style>.gbtn{display:inline-flex;align-items:center;gap:10px;background:#fff;color:#1f1f1f;border:1px solid #dadce0;border-radius:8px;padding:10px 16px;font:500 14px/1 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;text-decoration:none;cursor:pointer;transition:box-shadow .15s,background .15s}.gbtn:hover{background:#f8f9fa;box-shadow:0 1px 3px rgba(60,64,67,.3)}.gbtn img,.gbtn svg{display:block}</style>';
   function card({ link, base, hasDriveProjects, owner }) {
     const body = !on() ? '<p class="muted">Google is not set up on this site yet.</p>'
       : link ? `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px"><div style="flex:1;min-width:140px"><b>Connected</b><div class="muted">${esc(link.email || "Google account")}</div></div><form method="post" action="${esc(base)}/drive/unlink" style="margin:0"><button class="secondary" style="width:auto">Disconnect</button></form></div>${hasDriveProjects ? '<p class="muted" style="margin-bottom:0">Disconnecting stops saving new data for projects that use Google Drive. Files already in your Drive stay there.</p>' : ""}`
-      : `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px"><div style="flex:1;min-width:140px"><b>Not connected</b></div><a class="btn" href="/auth/google/drive/start${owner ? "?for=owner" : ""}" style="width:auto">Connect Google Drive</a></div>`;
-    return `<div class="card" style="max-width:560px;margin-top:16px"><h2>Google Drive storage</h2><p class="muted" style="margin-top:0">Save the data your projects collect (emails, connections and so on) as files in your own Google Drive. Free for everyone. AutoAuth can only see the files it creates in an AutoAuth folder.</p>${body}</div>`;
+      : `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px"><div style="flex:1;min-width:140px"><b>Not connected</b></div><a class="gbtn" href="/auth/google/drive/start${owner ? "?for=owner" : ""}"><img src="/drive-logo" alt="" width="20" height="20" onerror="this.outerHTML=this.getAttribute('data-fb')" data-fb="${esc(FALLBACK_ICON)}">Connect Google Drive</a></div>`;
+    return BTN_CSS + `<div class="card" style="max-width:560px;margin-top:16px"><h2>Google Drive storage</h2><p class="muted" style="margin-top:0">Save the data your projects collect (emails, connections and so on) as files in your own Google Drive. Free for everyone. AutoAuth can only see the files it creates in an AutoAuth folder.</p>${body}</div>`;
   }
   return { on, linkOf, saveLink, put, get, list, del, disconnect, mountPublic, card };
 };

@@ -4,7 +4,7 @@ const crypto = require("node:crypto");
 
 const TYPES = {
   oauth: { label: "OAuth2 callback", path: "/oauth/callback",
-    fields: [["client_id", "Client ID"], ["client_secret", "Client secret", "secret"], ["message", "Success message (paid plans)"], ["redirect", "Redirect after success (https, optional, paid plans)"], ["scopes", "Permissions to ask for", "scopes"], ["bot_token", "Bot token (only to add users to servers)", "secret_opt"], ["store", "Store users and tokens", "bool"], ["storage", "Where to store them", "storage"]] },
+    fields: [["client_id", "Client ID"], ["client_secret", "Client secret", "secret"], ["message", "Success message (paid plans)"], ["redirect", "Redirect after success (https, optional, paid plans)"], ["scopes", "Permissions to ask for", "scopes"], ["bot_token", "Bot token", "secret_opt"], ["store", "Store users and tokens", "bool"], ["storage", "Where to store them", "storage"]] },
   interactions: { label: "Interactions endpoint", path: "/interactions",
     fields: [["public_key", "Public key"], ["reply", "Reply to commands"]] },
   webhook: { label: "Webhook events", path: "/webhook", fields: [["public_key", "Public key"]] },
@@ -57,6 +57,8 @@ const ALL_SCOPES = [
   ["applications.builds.upload", "Upload builds for your application", "Discord approval required.", 1],
   ["applications.store.update", "Update your application's store listing", "Discord approval required.", 1],
 ];
+// Permissions whose controls call Discord as your bot, so the project needs the bot token.
+const NEEDS_BOT = ["guilds.join", "guilds.members.read", "bot", "role_connections.write"];
 const SCOPES = ALL_SCOPES.filter((s) => !s[3]);
 const REMOVED = ALL_SCOPES.filter((s) => s[3]).map((s) => [s[0], s[1]]);
 const SCOPE_KEYS = new Set(SCOPES.map((s) => s[0]));
@@ -197,7 +199,7 @@ ${rows.map((p, n) => `<tr><td data-l="Name">${esc(p.name)}</td><td data-l="Type"
 <label>Name</label><input id="sp-name" maxlength="40" autocomplete="off"><div class="muted" id="sp-url" style="font-size:12px;word-break:break-all"></div>
 <label>For</label><select id="sp-type"></select><div id="sp-fields"></div>
 <div style="margin-top:16px"><button type="button" class="green" id="sp-save">Save</button></div></dialog>
-<script type="application/json" id="sp-data">${json({ projects: view, types, origin: origin(), base, prefix: o.prefix || "", scopes: SCOPES, removed: REMOVED })}</script>
+<script type="application/json" id="sp-data">${json({ projects: view, types, origin: origin(), base, prefix: o.prefix || "", scopes: SCOPES, removed: REMOVED, needsBot: NEEDS_BOT })}</script>
 <script>
 var SP=JSON.parse(document.getElementById('sp-data').textContent),spEdit=null;
 function spSlug(s){return String(s).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,40);}
@@ -213,7 +215,8 @@ function spFields(){var t=SP.types[$('sp-type').value],box=$('sp-fields'),c=spEd
   else{el=f[2]==='area'?document.createElement('textarea'):document.createElement('input');if(f[2]==='secret'||f[2]==='secret_opt'){el.type='password';el.autocomplete='new-password';el.placeholder=spEdit&&(f[2]==='secret'?spEdit.hasSecret:spEdit.hasBot)?'Saved. Leave blank to keep':'';}else el.value=c[k]||'';if(f[2]==='area')el.style.minHeight='140px';box.appendChild(lab);box.appendChild(el);}
   el.dataset.k=k;el.dataset.kind=f[2]||'';});spUrl();spNotes();}
 function spChecked(){var w=document.querySelector('#sp-fields [data-kind=scopes]');return w?[].slice.call(w.querySelectorAll('input:checked')).map(function(i){return i.value;}):[];}
-function spNotes(){var n=$('sp-notes');if(!n)return;n.innerHTML='';var ch=spChecked();if(!ch.length)return;var h=document.createElement('b');h.textContent='How to set these up';n.appendChild(h);ch.forEach(function(k){var s=SP.scopes.filter(function(x){return x[0]===k;})[0],d=document.createElement('div');d.style.margin='6px 0';d.style.fontSize='13px';d.textContent=k+': '+s[2];n.appendChild(d);});}
+function spBot(){var el=document.querySelector('#sp-fields [data-k=bot_token]');if(!el)return;var need=spChecked().some(function(k){return SP.needsBot.indexOf(k)>-1;}),lab=el.previousSibling;el.style.display=need?'':'none';if(lab&&lab.tagName==='LABEL'){lab.style.display=need?'':'none';lab.textContent=need?'Bot token (needed for the permissions you picked)':'Bot token';}}
+function spNotes(){spBot();var n=$('sp-notes');if(!n)return;n.innerHTML='';var ch=spChecked();if(!ch.length)return;var h=document.createElement('b');h.textContent='How to set these up';n.appendChild(h);ch.forEach(function(k){var s=SP.scopes.filter(function(x){return x[0]===k;})[0],d=document.createElement('div');d.style.margin='6px 0';d.style.fontSize='13px';d.textContent=k+': '+s[2];n.appendChild(d);});}
 function spOpen(n){spEdit=n===undefined?null:SP.projects[n];$('sp-title').textContent=spEdit?'Edit project':'Create project';$('sp-name').value=spEdit?spEdit.name:'';$('sp-name').disabled=!!spEdit;
  var s=$('sp-type');s.innerHTML='';Object.keys(SP.types).forEach(function(k){var o=document.createElement('option');o.value=k;o.textContent=SP.types[k].label;s.appendChild(o);});if(spEdit){s.value=spEdit.type;}s.disabled=!!spEdit;spFields();openDlg('dlg-project');}
 document.addEventListener('DOMContentLoaded',function(){$('sp-type').addEventListener('change',spFields);$('sp-name').addEventListener('input',spUrl);
@@ -234,7 +237,7 @@ async function spDelete(n){var p=SP.projects[n];if(!confirm('Delete '+p.name+'?'
     };
     app.get("/dashboard/projects", logged, async (req, res) => {
       const rows = (await pool.query("SELECT p.slug,p.name,p.type,p.config,p.created_at,(SELECT COUNT(*)::int FROM side_project_users u WHERE u.slug=p.slug) AS users FROM side_projects p WHERE p.owner_account IS NULL ORDER BY p.created_at DESC")).rows;
-      const content = editor(rows, "/dashboard/projects", esc, { extra: (p) => `<a class="btn secondary" href="/dashboard/projects/${esc(p.slug)}/setup">Open</a>` });
+      const content = editor(rows, "/dashboard/projects", esc, { extra: (p) => `<a class="btn secondary" href="/dashboard/projects/${esc(p.slug)}/setup">Open</a><button type="button" class="secondary" hidden data-close="/dashboard/projects/${esc(p.slug)}" onclick="aaClose(this.dataset.close)">Close</button>` });
       render(req, res, "projects", content);
     });
 
@@ -271,5 +274,5 @@ async function spDelete(n){var p=SP.projects[n];if(!confirm('Delete '+p.name+'?'
     });
   }
 
-  return { mountPublic, mountUi, TYPES, SCOPES, clean, urlOf, editor, plog };
+  return { mountPublic, mountUi, TYPES, SCOPES, NEEDS_BOT, clean, urlOf, editor, plog };
 };

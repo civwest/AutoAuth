@@ -258,3 +258,13 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 - **Owner Google Drive:** the main dashboard profile has a Google Drive card; owner projects can store in Drive. Owner projects now collect data for every store.
 - **Google redirect URIs:** add both `/auth/google/callback` and `/auth/google/drive/callback`.
 - Drive can use its own Google client via `GOOGLE_DRIVE_CLIENT_ID` / `GOOGLE_DRIVE_CLIENT_SECRET`.
+
+## v1.6.8
+- **Opened projects only in the sidebar:** a project shows in the sidebar after you open it in this browser. Each opened project has a Close button on the Side Projects / Projects page.
+- **Change storage after creation:** a Storage card on each project's Setup tab switches between our database and Google Drive, and can move the existing data and tokens.
+- **All permission tabs built:** OpenID, Entitlements and Server membership data tabs; Add bot, Commands, Command permissions and Linked roles tools. The "under construction" pages and the home page notice are gone.
+- **Add to server:** pick the server from a popup of the servers your bot is in, not by typing an ID.
+- **Bot token box** only shows when a selected permission needs it.
+- **Account dashboard** now has the black "About AutoAuth" footer bar from the public site.
+- **Connect Google Drive button** has a Google-style look. It shows Google's official logo if you save the official PNG as `public/google-drive.png` (or an SVG as `public/google-drive.svg`), otherwise a neutral cloud icon.
+- Storage tokens are also kept (encrypted) for `role_connections.write` and `applications.commands.permissions.update`.

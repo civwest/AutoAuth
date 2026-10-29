@@ -185,7 +185,7 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
       const rows = (await pool.query("SELECT p.slug,p.name,p.type,p.config,p.locked,(SELECT COUNT(*)::int FROM side_project_users u WHERE u.slug=p.slug) AS users FROM side_projects p WHERE p.owner_account=$1 ORDER BY p.created_at DESC", [a.id])).rows.map((p) => short(a, p));
       const content = projects.editor(rows, `/dashboard/${a.username}/projects`, esc, {
         prefix: a.username + "/", urlFn: (p) => projects.urlOf({ type: p.type, slug: full(a, p.slug) }),
-        extra: (p) => `<a class="btn secondary" href="/dashboard/${a.username}/${esc(p.slug)}/setup">Open</a>`,
+        extra: (p) => `<a class="btn secondary" href="/dashboard/${a.username}/${esc(p.slug)}/setup">Open</a><button type="button" class="secondary" hidden data-close="/dashboard/${a.username}/${esc(p.slug)}" onclick="aaClose(this.dataset.close)">Close</button>`,
       });
       const L = await billing.limits(a.id), used = await billing.usage(a.id);
       const strip = `<p class="muted" style="margin:0 0 14px">Plan: <b>${esc(L.name)}</b> · Database storage ${used} of ${L.dbUsers.toLocaleString("en-US")} users · ${rows.length} of ${L.projects} projects · Google Drive storage is unlimited · <a href="${req.billing ? `/dashboard/${esc(a.username)}/billing` : "/subscribe"}" style="color:#9db4ff">${req.billing ? "Billing" : "See plans"}</a></p>`;
@@ -240,7 +240,7 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
       if (p.type === "oauth" && c.client_id) { const q = new URLSearchParams({ client_id: c.client_id, response_type: "code", redirect_uri: url }); q.set("scope", chosen.join(" ") || "identify"); link = "https://discord.com/oauth2/authorize?" + q; }
       if (p.type === "invite") link = url;
       const notes = chosen.map((k) => projects.SCOPES.find((s) => s[0] === k)).filter(Boolean);
-      page(req, res, "projects", sub(req.acct, p, "setup") + `<div class="card"><h2>Setup</h2><ol>${steps.map((s) => `<li style="margin:8px 0">${s}</li>`).join("")}</ol>${link && p.type === "oauth" ? `<h3>Authorize link</h3><p><code style="word-break:break-all">${esc(link)}</code></p>` : ""}</div>${notes.length ? `<div class="card" style="margin-top:16px"><h2>Permissions</h2>${notes.map((s) => `<p style="margin:10px 0"><b>${esc(s[0])}</b>: ${esc(s[1])}${s[3] ? " <i>(needs Discord approval)</i>" : ""}<br><span class="muted">${esc(s[2])}</span></p>`).join("")}</div>` : ""}`);
+      page(req, res, "projects", sub(req.acct, p, "setup") + `<div class="card"><h2>Setup</h2><ol>${steps.map((s) => `<li style="margin:8px 0">${s}</li>`).join("")}</ol>${link && p.type === "oauth" ? `<h3>Authorize link</h3><p><code style="word-break:break-all">${esc(link)}</code></p>` : ""}</div>${notes.length ? `<div class="card" style="margin-top:16px"><h2>Permissions</h2>${notes.map((s) => `<p style="margin:10px 0"><b>${esc(s[0])}</b>: ${esc(s[1])}${s[3] ? " <i>(needs Discord approval)</i>" : ""}<br><span class="muted">${esc(s[2])}</span></p>`).join("")}</div>` : ""}${pdata.storageCard(req.acct, p)}`);
     });
     app.get("/dashboard/:u/:name/users", acctOnly, async (req, res) => {
       const a = req.acct, p = await own(a, req.params.name); if (!p) return res.status(404).send("Not found");

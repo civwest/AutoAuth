@@ -259,21 +259,40 @@ In resend.com > Domains > Add Domain, enter `autoauth.cfd`. Resend then shows th
 | Type | Name | Value | Notes |
 | --- | --- | --- | --- |
 | TXT | `resend._domainkey` | `p=MIGf...` (long key, copy it from Resend) | DKIM, unique to your account |
-| MX | `send` | `feedback-smtp.<region>.amazonses.com` | priority 10, the region is shown by Resend |
+| MX | the host Resend shows (for example `bounce.mail`) | the value Resend shows, `feedback-smtp.<region>.amazonses.com` | priority 10 |
 | TXT | `send` | `v=spf1 include:amazonses.com ~all` | SPF |
 | TXT | `_dmarc` | `v=DMARC1; p=none; rua=mailto:support@autoauth.cfd` | DMARC, recommended |
 
 Then click Verify in Resend, make an API key, and set `RESEND_API_KEY` in Render. Receipts are only sent once the domain shows Verified. These records only cover sending; they do not create a mailbox, so replies to noreply@ go nowhere.
 
-## Under construction
+## Site notes
 
-The home page shows this list in a notice at the top. The contact email in the footer defaults to `support@` plus your domain; set `SUPPORT_EMAIL` to change it. When the bot is not connected to Discord, every public page shows an Offline banner at the top.
+The contact email in the footer defaults to `support@` plus your domain; set `SUPPORT_EMAIL` to change it. When the bot is not connected to Discord, every public page shows an Offline banner at the top. The sign-up account dashboard also shows the "About AutoAuth" footer bar.
 
-These parts are not built yet and show "Under construction" where they appear. They are removed from this list when the code is added.
+Nothing is marked "under construction" any more. Every permission a project can ask for has its own tab:
 
-- **Controls for these OAuth permissions** (each selected one gets its own tab that says Under construction): `guilds.members.read`, `bot`, `applications.commands`, `applications.commands.update`, `applications.commands.permissions.update`, `role_connections.write`, `openid`, `applications.entitlements`, and every permission Discord restricts (RPC, relationships, presences, activities, voice, lobbies, SDK, builds, store, messages, DM channels, group DMs).
+- **Data tabs** (project stores users): `email` (Emails), `connections`, `guilds` (Servers), `webhook.incoming` (Webhooks, send a message), `openid` (OpenID subject and issue time), `applications.entitlements` (Entitlements), `guilds.members.read` (Server membership: nickname, role count and join date in each server your bot is in, needs the bot token).
+- **Add to server** (`guilds.join`): select users, then pick a server from a popup listing the servers your bot is in.
+- **Add bot** (`bot`): an invite link builder with a permissions number, and the list of servers the bot is in, with a Leave button.
+- **Commands** (`applications.commands`, `applications.commands.update`): list, add, replace and delete global slash commands. Uses the bot token if set, otherwise a client-credentials token from the project's client ID and secret.
+- **Command permissions** (`applications.commands.permissions.update`): set permissions for a command in a server, as an admin who authorized the project with that scope.
+- **Linked roles** (`role_connections.write`): save the metadata fields (needs the bot token) and set a member's values.
 
-Built and working: authenticator-app two-step login, Google Drive storage (free for everyone), plans and billing, Discord, Google and X sign-in, project accounts, project dashboards, Support chat, data tabs for `identify`, `email`, `connections`, `guilds`, `webhook.incoming` and `guilds.join`, abuse flagging, and account deletion.
+The bot token box in the project editor only appears when a picked permission needs it (`guilds.join`, `guilds.members.read`, `bot`, `role_connections.write`). Permissions Discord restricts (RPC, relationships, presences, activities, voice, lobbies and so on) are not offered.
+
+Built and working: authenticator-app two-step login, Google Drive storage (free for everyone, changeable after a project exists), plans and billing, Discord, Google and X sign-in, project accounts, project dashboards, Support chat, all permission tabs above, abuse flagging, and account deletion.
+
+### Changing storage later
+
+On a project's Setup tab, the Storage card switches between our database and Google Drive. Leave "Move the data that is already stored" ticked to copy existing users' data (and add-to-server tokens) across and clear it from the old place. Drive must be connected first.
+
+### Opened projects in the sidebar
+
+A project shows under Projects in the sidebar only after you open it in this browser (the list is kept in that browser). The Side Projects / Projects page has a Close button on each opened project to hide it from the sidebar again.
+
+### Google Drive button logo
+
+The Connect Google Drive button has a neutral cloud icon. To show Google's own Drive logo, download the official logo from Google's Drive branding page (developers.google.com/drive/api/guides/branding, a PNG) and save it as `public/google-drive.png` (an `.svg` also works); the button uses it automatically.
 
 ### Free vs paid public pages
 
