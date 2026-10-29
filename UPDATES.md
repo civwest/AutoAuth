@@ -243,3 +243,18 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 
 ## v1.6.4
 - The two-step code page address is now `/login%2Fa%<token>` (no `25`).
+
+## v1.6.5
+- Account dashboards: each project is listed under Projects in the sidebar and can be clicked open to show its tabs (Setup, Users, a tab per selected permission, Logs).
+
+## v1.6.6
+- Main dashboard: Side Projects now lists each of your projects in the sidebar; click one to open its tabs (Setup, Users, a tab per selected permission, Logs). Each project has its own pages and an Open button in the list. Automatic abuse flagging still applies only to sign-up accounts.
+
+## v1.6.7
+- **Free-tier branding:** on the Free plan, public project pages (authorization result, Terms, Privacy) show "Using AutoAuth backend" and a "Powered by AutoAuth" footer. Paid plans and owner projects are unbranded.
+- **Custom message and redirect are paid-only.** Free projects ignore them.
+- **Discord app redirect:** the default result page opens the Discord app on desktop or phone, with an Open Discord button and a browser fallback.
+- **Free trial label:** on `/subscribe`, Tier 1's free trial shows only for the 1 month term.
+- **Owner Google Drive:** the main dashboard profile has a Google Drive card; owner projects can store in Drive. Owner projects now collect data for every store.
+- **Google redirect URIs:** add both `/auth/google/callback` and `/auth/google/drive/callback`.
+- Drive can use its own Google client via `GOOGLE_DRIVE_CLIENT_ID` / `GOOGLE_DRIVE_CLIENT_SECRET`.

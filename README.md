@@ -182,10 +182,12 @@ OAuth and invite projects list every Discord OAuth2 scope. Selecting one shows h
 
 Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, and/or `X_API_KEY` and `X_API_SECRET`. A button appears on `/login`, `/signup` and the account profile only when its pair is set. Add these redirect URIs with each provider:
 
-- Google (Cloud Console > Credentials > OAuth client, Web application): `https://<your domain>/auth/google/callback`
+- Google (Cloud Console > Credentials > OAuth client, Web application): add **both** `https://<your domain>/auth/google/callback` (sign-in) and `https://<your domain>/auth/google/drive/callback` (Google Drive storage, same client). Also enable the **Google Drive API** and add the `drive.file` scope on the consent screen.
 - X (console.x.com > your app > User authentication settings > turn on OAuth 1.0a, permission Read, "Request email" off): add `https://<your domain>/auth/x/callback` as a Callback URI. Use the app's **API Key and Secret** (the "Consumer Keys"), not the OAuth 2.0 Client ID. "Continue with X" sends people to `api.x.com/oauth/authenticate`, the same one-click screen as other sites, and only their X user id and @handle are kept.
 
 Signing up with a service uses the name on that account as the username. Accounts can also link Discord, Google and X from Profile, change their password, or delete the account (this removes their projects, stored users, data and support messages).
+
+**Sidebar:** every project appears under Projects in the left menu (and under Side Projects on the main dashboard, where your own projects get the same pages at `/dashboard/projects/<name>/<tab>`). Click a project to open or close its tabs: Setup, Users (when it stores users), one tab for each selected permission that has controls, and Logs. The open project and tab are highlighted.
 
 ### Data tabs
 
@@ -272,3 +274,11 @@ These parts are not built yet and show "Under construction" where they appear. T
 - **Controls for these OAuth permissions** (each selected one gets its own tab that says Under construction): `guilds.members.read`, `bot`, `applications.commands`, `applications.commands.update`, `applications.commands.permissions.update`, `role_connections.write`, `openid`, `applications.entitlements`, and every permission Discord restricts (RPC, relationships, presences, activities, voice, lobbies, SDK, builds, store, messages, DM channels, group DMs).
 
 Built and working: authenticator-app two-step login, Google Drive storage (free for everyone), plans and billing, Discord, Google and X sign-in, project accounts, project dashboards, Support chat, data tabs for `identify`, `email`, `connections`, `guilds`, `webhook.incoming` and `guilds.join`, abuse flagging, and account deletion.
+
+### Free vs paid public pages
+
+On the Free plan a project's public pages (authorization result, Terms, Privacy) show the project name, "Using AutoAuth backend" and a "Powered by AutoAuth" footer, and the custom success message and custom redirect are ignored. Paid plans and your own (owner) projects are unbranded and can use both. By default, after authorizing, the page opens the Discord app (`discord://-/channels/@me`) on desktop or phone, with a button and a browser link as fallback.
+
+The main dashboard profile also has a Google Drive card, so your own projects can store data in your Drive.
+
+**Separate Drive client:** set `GOOGLE_DRIVE_CLIENT_ID` and `GOOGLE_DRIVE_CLIENT_SECRET` to use a different Google Cloud project for Drive. Its only redirect URI is `https://<your domain>/auth/google/drive/callback`. Without them, Drive uses the sign-in client.

@@ -4,7 +4,7 @@ const crypto = require("node:crypto");
 
 const TYPES = {
   oauth: { label: "OAuth2 callback", path: "/oauth/callback",
-    fields: [["client_id", "Client ID"], ["client_secret", "Client secret", "secret"], ["message", "Success message"], ["redirect", "Redirect after success (https, optional)"], ["scopes", "Permissions to ask for", "scopes"], ["bot_token", "Bot token (only to add users to servers)", "secret_opt"], ["store", "Store users and tokens", "bool"], ["storage", "Where to store them", "storage"]] },
+    fields: [["client_id", "Client ID"], ["client_secret", "Client secret", "secret"], ["message", "Success message (paid plans)"], ["redirect", "Redirect after success (https, optional, paid plans)"], ["scopes", "Permissions to ask for", "scopes"], ["bot_token", "Bot token (only to add users to servers)", "secret_opt"], ["store", "Store users and tokens", "bool"], ["storage", "Where to store them", "storage"]] },
   interactions: { label: "Interactions endpoint", path: "/interactions",
     fields: [["public_key", "Public key"], ["reply", "Reply to commands"]] },
   webhook: { label: "Webhook events", path: "/webhook", fields: [["public_key", "Public key"]] },
@@ -63,13 +63,13 @@ const SCOPE_KEYS = new Set(SCOPES.map((s) => s[0]));
 const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 const ED25519_DER = Buffer.from("302a300506032b6570032100", "hex");
 
-module.exports = function createProjects({ pool, enc, dec, log, express, collect, dataScopes, limits }) {
+module.exports = function createProjects({ pool, enc, dec, log, express, collect, dataScopes, limits, drive }) {
   const origin = () => { try { return new URL(process.env.REDIRECT_URI).origin; } catch { return ""; } };
   const urlOf = (p) => `${origin()}/projects/${p.slug}${TYPES[p.type].path}`;
   const hits = new Map();
   const limited = (k, max) => { const n = Date.now(), h = hits.get(k); if (!h || h.until < n) { hits.set(k, { n: 1, until: n + 60000 }); return false; } return ++h.n > max; };
   setInterval(() => { const n = Date.now(); for (const [k, v] of hits) if (v.until < n) hits.delete(k); }, 60000).unref();
-  const get = async (slug, type) => { const r = await pool.query("SELECT slug,name,type,config,owner_account,locked FROM side_projects WHERE slug=$1 AND type=$2", [String(slug), type]); const p = r.rows[0]; return p && !p.locked ? p : null; };
+  const get = async (slug, type) => { const r = await pool.query("SELECT slug,name,type,config,owner_account,created_by,locked FROM side_projects WHERE slug=$1 AND type=$2", [String(slug), type]); const p = r.rows[0]; return p && !p.locked ? p : null; };
   const keyOf = (req) => (req.params.user ? `${req.params.user}/${req.params.slug}` : String(req.params.slug));
   // Projects owned by a signed-up account log to their own table so site admins never see that data.
   const plog = (p, type, detail) => p && p.owner_account ? pool.query("INSERT INTO project_logs(slug,event_type,detail) VALUES($1,$2,$3)", [p.slug, type, JSON.stringify(detail)]).catch(() => {}) : log(type, detail);
@@ -87,24 +87,30 @@ module.exports = function createProjects({ pool, enc, dec, log, express, collect
   }
 
   function mountPublic({ app, site }) {
-    const page = (res, status, title, body) => res.status(status).set("Cache-Control", "no-store").send(site.page(title, body, ""));
+    // Public pages of a project. Projects on the free plan carry AutoAuth branding; paid plans and the main dashboard's own projects do not.
+    const DISCORD_APP = "discord://-/channels/@me"; // opens the Discord desktop or phone app when it is installed
+    const free = async (p) => !!(p && p.owner_account && limits && (await limits.tierOf(p.owner_account).catch(() => 0)) === 0);
+    const shell = (p, isFree, { title, body, openDiscord }) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${html(title)}</title><link rel="icon" type="image/webp" href="/assets/icon.webp">${openDiscord ? `<meta http-equiv="refresh" content="1;url=${DISCORD_APP}">` : ""}<style>:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0d1117;color:#e6edf3;font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;padding:24px}main{width:100%;max-width:560px;text-align:center}h1{margin:0 0 6px;font-size:clamp(26px,6vw,36px)}.by{display:inline-flex;align-items:center;gap:8px;color:#9da7b3;margin:0 0 18px}.by img{width:22px;height:22px;border-radius:6px}.btn{display:block;margin:12px auto 0;max-width:320px;padding:13px 16px;border-radius:10px;background:#5865F2;color:#fff;text-decoration:none;font-weight:600}.alt{display:block;margin-top:12px;color:#9db4ff}.doc{text-align:left}.foot{margin-top:28px;color:#9da7b3;font-size:14px}.foot a{color:#e6edf3}</style></head><body><main>${body}${isFree ? `<p class="foot">Powered by <a href="${html(origin())}">AutoAuth</a></p>` : ""}</main></body></html>`;
+    const send = async (res, status, p, opts) => res.status(status).set("Cache-Control", "no-store").send(shell(p, await free(p), opts));
+    const head = (p, isFree, text) => `<h1>${html(p.name)}</h1>${isFree ? `<p class="by"><img src="/assets/icon.webp" alt="">Using AutoAuth backend</p>` : ""}${text ? `<p>${text}</p>` : ""}`;
+    const msg = async (res, status, p, title, text) => { const f = await free(p); return res.status(status).set("Cache-Control", "no-store").send(shell(p, f, { title, body: head(p, f, `<b>${html(title)}</b>${text ? "<br>" + html(text) : ""}`) })); };
 
     app.get(["/projects/:slug/oauth/callback", "/projects/:user/:slug/oauth/callback"], async (req, res) => {
       res.set({ "Referrer-Policy": "no-referrer", "Cache-Control": "no-store" });
       const p = await get(keyOf(req), "oauth").catch(() => null);
       if (!p) return res.status(404).send("Not found");
       if (limited("o:" + req.ip, 30)) return res.status(429).send("Too many requests.");
-      if (req.query.error) return page(res, 400, "Authorization cancelled", "<h1>Authorization cancelled</h1>");
-      if (typeof req.query.code !== "string" || !req.query.code) return page(res, 400, "Authorization failed", "<h1>Authorization failed</h1><p>No code was returned.</p>");
+      if (req.query.error) return msg(res, 400, p, "Authorization cancelled");
+      if (typeof req.query.code !== "string" || !req.query.code) return msg(res, 400, p, "Authorization failed", "No code was returned.");
       const c = p.config || {};
       try {
         const r = await fetch("https://discord.com/api/v10/oauth2/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: new URLSearchParams({ client_id: c.client_id, client_secret: dec(c.client_secret_enc), grant_type: "authorization_code", code: req.query.code, redirect_uri: urlOf(p) }) });
         const t = await r.json();
-        if (!r.ok) { await plog(p, "project_oauth_failed", { slug: p.slug, status: r.status, error: t.error }); return page(res, 502, "Authorization failed", "<h1>Authorization failed</h1><p>Discord rejected the code.</p>"); }
+        if (!r.ok) { await plog(p, "project_oauth_failed", { slug: p.slug, status: r.status, error: t.error }); return msg(res, 502, p, "Authorization failed", "Discord rejected the code."); }
         const ur = await fetch("https://discord.com/api/v10/users/@me", { headers: { Authorization: `Bearer ${t.access_token}` } }), u = await ur.json();
-        if (!ur.ok || !u.id) return page(res, 502, "Authorization failed", "<h1>Authorization failed</h1>");
-        const drv = !!(c.store && p.owner_account && c.storage === "drive"); // Google Drive projects keep tokens and data in the owner's Drive, so they are never limited by plan
+        if (!ur.ok || !u.id) return msg(res, 502, p, "Authorization failed");
+        const drv = !!(c.store && c.storage === "drive"); // Google Drive projects keep tokens and data in the owner's Drive, so they are never limited by plan
         const over = !!(c.store && limits && !(await limits.canStore(p, u.id))); // database storage is limited by the owner's plan
         const keep = !!c.store && !over;
         if (keep) await pool.query(`INSERT INTO side_project_users(slug,user_id,username,access_token_enc,refresh_token_enc,expires_at,scope) VALUES($1,$2,$3,$4,$5,$6,$7)
@@ -112,11 +118,14 @@ module.exports = function createProjects({ pool, enc, dec, log, express, collect
           [p.slug, u.id, u.global_name || u.username || u.id, drv ? enc("") : enc(t.access_token), drv ? enc("") : enc(t.refresh_token || ""), Date.now() + Number(t.expires_in || 604800) * 1000, String(t.scope || "")]);
         else fetch("https://discord.com/api/v10/oauth2/token/revoke", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: c.client_id, client_secret: dec(c.client_secret_enc), token: t.access_token, token_type_hint: "access_token" }) }).catch(() => {});
         if (over) await plog(p, "store_limit_reached", { slug: p.slug, note: "A user authorized but was not saved: the database storage limit of the plan is full. Upgrade the plan or switch this project to Google Drive." });
-        if (keep && collect && p.owner_account) await collect(p, u, t);
+        if (keep && collect) await collect(p, u, t);
         await plog(p, "project_oauth_success", { slug: p.slug, user_id: u.id, username: u.global_name || u.username, scope: String(t.scope || ""), stored: keep });
-        if (c.redirect) return res.redirect(303, c.redirect);
-        return page(res, 200, p.name, `<h1>${html(c.message || "Authorized")}</h1>`);
-      } catch (e) { console.error(e); return page(res, 500, "Authorization failed", "<h1>Authorization failed</h1>"); }
+        const f = await free(p);
+        if (!f && c.redirect) return res.redirect(303, c.redirect); // a custom redirect is a paid-plan extra
+        // Default: say it worked and open the Discord app (desktop or phone), with a link in case it does not open.
+        const done = !f && c.message ? html(c.message) : "You are all set.";
+        return res.status(200).set("Cache-Control", "no-store").send(shell(p, f, { title: p.name, openDiscord: true, body: head(p, f, `<b>${done}</b><br>Opening Discord…`) + `<a class="btn" href="${DISCORD_APP}">Open Discord</a><a class="alt" href="https://discord.com/channels/@me">Use Discord in the browser instead</a>` }));
+      } catch (e) { console.error(e); return msg(res, 500, p, "Authorization failed"); }
     });
 
     for (const [type, path] of [["interactions", "/interactions"], ["webhook", "/webhook"]]) {
@@ -138,7 +147,7 @@ module.exports = function createProjects({ pool, enc, dec, log, express, collect
         if (!p) return res.status(404).send("Not found");
         const c = p.config || {};
         const paras = String(c.body || "").split(/\n{2,}/).map((x) => `<p>${html(x.trim()).replace(/\n/g, "<br>")}</p>`).join("");
-        return res.send(site.page(c.title || TYPES[type].label, `<h1>${html(c.title || TYPES[type].label)}</h1>${paras}`, ""));
+        return res.send(shell(p, await free(p), { title: c.title || TYPES[type].label, body: `<div class="doc"><h1>${html(c.title || TYPES[type].label)}</h1>${paras}</div>` }));
       });
     }
 
@@ -217,9 +226,15 @@ async function spDelete(n){var p=SP.projects[n];if(!confirm('Delete '+p.name+'?'
   }
 
   function mountUi({ app, logged, verifyOrigin, render, esc }) {
+    // A project that saves to Google Drive needs the Drive connected on the main dashboard profile.
+    const needDrive = async (req, config) => {
+      if (config.storage !== "drive") return;
+      if (!drive || !drive.on()) throw new Error("Google Drive is not set up on this site yet.");
+      if (!(await drive.linkOf("o:" + req.session.owner))) throw new Error("Connect Google Drive on your profile page first, then pick it here.");
+    };
     app.get("/dashboard/projects", logged, async (req, res) => {
       const rows = (await pool.query("SELECT p.slug,p.name,p.type,p.config,p.created_at,(SELECT COUNT(*)::int FROM side_project_users u WHERE u.slug=p.slug) AS users FROM side_projects p WHERE p.owner_account IS NULL ORDER BY p.created_at DESC")).rows;
-      const content = editor(rows, "/dashboard/projects", esc);
+      const content = editor(rows, "/dashboard/projects", esc, { extra: (p) => `<a class="btn secondary" href="/dashboard/projects/${esc(p.slug)}/setup">Open</a>` });
       render(req, res, "projects", content);
     });
 
@@ -229,7 +244,7 @@ async function spDelete(n){var p=SP.projects[n];if(!confirm('Delete '+p.name+'?'
       if (!TYPES[type]) return res.status(400).json({ error: "Choose what the project is for." });
       if (!name || !SLUG.test(slug)) return res.status(400).json({ error: "Enter a name using letters or numbers." });
       try {
-        const config = clean(type, b.config);
+        const config = clean(type, b.config); await needDrive(req, config);
         await pool.query("INSERT INTO side_projects(slug,name,type,config,created_by) VALUES($1,$2,$3,$4,$5)", [slug, name, type, JSON.stringify(config), req.session.owner]);
         await log("project_created", { slug, type }, req.session.owner);
         res.json({ ok: true, slug });
@@ -240,7 +255,7 @@ async function spDelete(n){var p=SP.projects[n];if(!confirm('Delete '+p.name+'?'
       const p = (await pool.query("SELECT slug,type,config FROM side_projects WHERE slug=$1 AND owner_account IS NULL", [String(req.params.slug)])).rows[0];
       if (!p) return res.status(404).json({ error: "Project not found." });
       try {
-        const config = clean(p.type, (req.body || {}).config, p.config);
+        const config = clean(p.type, (req.body || {}).config, p.config); await needDrive(req, config);
         await pool.query("UPDATE side_projects SET config=$2 WHERE slug=$1", [p.slug, JSON.stringify(config)]);
         await log("project_updated", { slug: p.slug }, req.session.owner);
         res.json({ ok: true });

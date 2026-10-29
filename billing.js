@@ -199,7 +199,7 @@ module.exports = function createBilling({ pool, log, esc, origin, express, authP
   }
 
   // ---------- pages ----------
-  const CSS = `:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#000;color:#fff;font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}a{color:inherit}
+  const CSS = `[hidden]{display:none!important}:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#000;color:#fff;font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}a{color:inherit}
 .top{display:flex;justify-content:space-between;align-items:center;padding:18px 24px}.top a{text-decoration:none;font-weight:700}.top .r a{font-weight:600;color:#d1d5db;margin-left:16px}
 main{max-width:1120px;margin:0 auto;padding:12px 16px 56px}h1{font-size:clamp(28px,5vw,40px);margin:12px 0 6px;text-align:center}.lead{color:#b9bcc2;text-align:center;margin:0 auto 22px;max-width:640px}
 .bar{display:flex;justify-content:center;margin:0 0 26px;position:relative}.dd{position:relative}.dd>button{background:#2b2b2e;color:#fff;border:1px solid #3d3d41;border-radius:12px;padding:11px 18px;font:600 15px system-ui;cursor:pointer;display:flex;gap:10px;align-items:center;min-width:170px;justify-content:space-between}
@@ -220,10 +220,10 @@ ul.perks{list-style:none;margin:22px 0 0;padding:0;display:flex;flex-direction:c
     const s = req.session && req.session.acct, cur = s ? await tierOf(s.id) : 0;
     const data = { prices: PRICES, cur: { code: shownCode, rate: r[code] ? rate : 1 }, cc, current: cur, links: Object.fromEntries([1, 2, 3].map((t) => [t, TERMS.filter((m) => linkFor(t, m)).length === TERMS.length])) };
     const names = { 1: PLANS[1].name, 2: PLANS[2].name, 3: PLANS[3].name };
-    const cards = [1, 2, 3].map((t) => `<article class="plan${cur === t ? " cur" : ""}" data-t="${t}"><h2>${names[t]}${t === 1 ? '<span class="tag">14-day free trial</span>' : ""}</h2>
+    const cards = [1, 2, 3].map((t) => `<article class="plan${cur === t ? " cur" : ""}" data-t="${t}"><h2>${names[t]}${t === 1 ? '<span class="tag" data-trial>14-day free trial</span>' : ""}</h2>
 <div class="price" data-price></div><div class="bill" data-bill></div>
 <a class="sub" data-sub href="/subscribe/go?tier=${t}&term=1">${cur === t ? "Current plan" : "Subscribe"}</a>
-<ul class="perks">${PERKS[t].map(([i, txt]) => `<li>${icon(i)}<span>${esc(txt)}</span></li>`).join("")}</ul></article>`).join("");
+<ul class="perks">${PERKS[t].map(([i, txt]) => `<li${i === "gift" ? " data-trial" : ""}>${icon(i)}<span>${esc(txt)}</span></li>`).join("")}</ul></article>`).join("");
     const body = `<main><h1>Choose your plan</h1><p class="lead">Every plan gives you more room and extras. Nothing about how AutoAuth works is held back from free accounts.</p>
 <div class="bar"><div class="dd" id="dd"><button type="button" id="dd-btn" aria-haspopup="listbox" aria-expanded="false"><span id="dd-lab">1 month</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></button>
 <ul id="dd-list" role="listbox" hidden><li role="option" tabindex="0" data-m="1" aria-selected="true">1 month</li><li role="option" tabindex="0" data-m="3">3 months <small>save ~4%</small></li><li role="option" tabindex="0" data-m="6">6 months <small>save ~11%</small></li><li role="option" tabindex="0" data-m="12">1 year <small>save ~17%</small></li></ul></div></div>
@@ -238,6 +238,7 @@ function render(){document.querySelectorAll('.plan').forEach(function(el){var t=
  var b=term===1?'Billed monthly at '+fmt(tot,'CAD')+' CAD':'Billed '+fmt(tot,'CAD')+' CAD every '+(term===12?'year':term+' months');
  if(loc)b+=' (\\u2248 '+fmt(tot*D.cur.rate,D.cur.code)+')';if(term>1)b+=' <span class="save">\\u00b7 save '+Math.round((1-tot/one)*100)+'%</span>';
  el.querySelector('[data-bill]').innerHTML=b;
+ var tr=el.querySelectorAll('[data-trial]');for(var q=0;q<tr.length;q++)tr[q].hidden=term!==1; // the free trial only comes with monthly billing
  var a=el.querySelector('[data-sub]');if(Number(t)===D.current){a.textContent='Current plan';a.setAttribute('aria-disabled','true');a.removeAttribute('href');}else if(!D.links[t]){a.textContent='Coming soon';a.setAttribute('aria-disabled','true');a.removeAttribute('href');}else{a.textContent='Subscribe';a.href='/subscribe/go?tier='+t+'&term='+term;a.removeAttribute('aria-disabled');}});}
 var btn=document.getElementById('dd-btn'),list=document.getElementById('dd-list'),lab=document.getElementById('dd-lab');
 function open(o){list.hidden=!o;btn.setAttribute('aria-expanded',o?'true':'false');if(o){var s=list.querySelector('[aria-selected=true]');s&&s.focus();}}

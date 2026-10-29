@@ -79,7 +79,8 @@ ${p.discord ? `<h3>Discord</h3><p>${discordHref(p.discord) ? `<a href="${esc(dis
     const me = admins.find((a) => a.key === req.me), sm = me ? await c.twofa.summary("owner", me.user, me.totp) : { on: false };
     const twoFa = c.twofa.card({ on: sm.on, env: sm.env, left: sm.left, base: "/users/profile/2fa" });
     const reset = `<div class="card" style="max-width:640px;margin-top:16px;border-color:#7a2b35"><h2>Delete all project accounts</h2><p class="muted" style="margin-top:0">Deletes every sign-up account made on the site, with their projects, stored users, project logs, support chats, linked Google Drives and two-step login. Your own dashboard logins, the bot's authorized users and your own projects are not touched. This cannot be undone.</p><form method="post" action="/users/profile/reset-accounts"><label>Type <b>DELETE ALL ACCOUNTS</b> to confirm</label><input name="confirm" autocomplete="off" required><button class="danger" style="width:auto">Delete everything</button></form></div>`;
-    return `<div class="card" style="max-width:640px;margin-top:16px"><h2>Linked accounts</h2>${rows.join("")}</div>` + twoFa + reset;
+    const driveCard = c.drive ? c.drive.card({ link: await c.drive.linkOf("o:" + req.session.owner), base: "/users/profile", owner: true, hasDriveProjects: !!(await pool.query("SELECT 1 FROM side_projects WHERE owner_account IS NULL AND created_by=$1 AND config->>'storage'='drive' LIMIT 1", [req.session.owner])).rows[0] }) : "";
+    return `<div class="card" style="max-width:640px;margin-top:16px"><h2>Linked accounts</h2>${rows.join("")}</div>` + driveCard + twoFa + reset;
   }
   const tfh = c.twofa.handlers((req) => { const me = admins.find((a) => a.key === req.me); return me ? { kind: "owner", ident: me.user, label: me.user, env: me.totp } : null; }), tfJson = express.json({ limit: "2kb" });
   for (const p of ["start", "enable", "disable"]) app.post("/users/profile/2fa/" + p, logged, owner, verifyOrigin, tfJson, tfh[p]);
@@ -99,6 +100,10 @@ ${p.discord ? `<h3>Discord</h3><p>${discordHref(p.discord) ? `<a href="${esc(dis
       req.session.flash = `Deleted ${n} account${n === 1 ? "" : "s"} and ${slugs.length} project${slugs.length === 1 ? "" : "s"}.`;
     } catch (e) { await cl.query("ROLLBACK").catch(() => {}); console.error("reset accounts", e.message); req.session.flash = "Could not delete the accounts. Nothing was changed."; }
     finally { cl.release(); }
+    res.redirect(303, "/users/profile");
+  });
+  app.post("/users/profile/drive/unlink", logged, owner, verifyOrigin, async (req, res) => {
+    if (c.drive) { await c.drive.disconnect("o:" + req.session.owner); if (log) await log("drive_disconnected", {}, req.session.owner); req.session.flash = "Google Drive disconnected."; }
     res.redirect(303, "/users/profile");
   });
   app.post("/users/profile/unlink/:provider", logged, owner, verifyOrigin, async (req, res) => {

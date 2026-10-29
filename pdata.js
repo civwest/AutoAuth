@@ -21,7 +21,9 @@ module.exports = function createPdata({ pool, enc, dec, log, express, esc, origi
   const limited = (k, max, ms = 60000) => { const n = Date.now(), h = hits.get(k); if (!h || h.until < n) { hits.set(k, { n: 1, until: n + ms }); return false; } return ++h.n > max; };
   setInterval(() => { const n = Date.now(); for (const [k, v] of hits) if (v.until < n) hits.delete(k); }, 60000).unref();
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const isDrive = (p) => !!(drive && p.owner_account && (p.config || {}).storage === "drive");
+  const isDrive = (p) => !!(drive && (p.config || {}).storage === "drive");
+  // Whose Google Drive: the project account's, or the dashboard login that made the project.
+  const dsub = (p) => (p.owner_account ? p.owner_account : "o:" + (p.created_by || ""));
   const scopesOf = (p) => String((p.config || {}).scopes || "").split(" ").filter(Boolean);
 
   // Tabs shown on a project's dashboard.
@@ -41,7 +43,7 @@ module.exports = function createPdata({ pool, enc, dec, log, express, esc, origi
   async function collect(p, u, t) {
     const sc = String(t.scope || "").split(/[ ,]+/), drv = isDrive(p), uname = u.global_name || u.username || u.id;
     const put = (kind, data) => drv
-      ? drive.put(p.owner_account, p.slug, `${kind}-${u.id}.json`, JSON.stringify({ user_id: u.id, username: uname, updated: new Date().toISOString(), data }, null, 2))
+      ? drive.put(dsub(p), p.slug, `${kind}-${u.id}.json`, JSON.stringify({ user_id: u.id, username: uname, updated: new Date().toISOString(), data }, null, 2))
       : pool.query("INSERT INTO project_data(slug,user_id,kind,data_enc) VALUES($1,$2,$3,$4) ON CONFLICT(slug,user_id,kind) DO UPDATE SET data_enc=$4,updated_at=NOW()", [p.slug, u.id, kind, enc(JSON.stringify(data))]);
     const get = async (path) => { const r = await fetch("https://discord.com/api/v10" + path, { headers: { Authorization: `Bearer ${t.access_token}` } }); return r.ok ? r.json() : null; };
     try {
@@ -50,7 +52,7 @@ module.exports = function createPdata({ pool, enc, dec, log, express, esc, origi
       if (sc.includes("guilds")) { const l = await get("/users/@me/guilds"); if (Array.isArray(l)) await put("guilds", l.map((g) => ({ id: g.id, name: g.name, owner: !!g.owner }))); }
       if (t.webhook && HOOK_URL.test(String(t.webhook.url || ""))) await put("webhook", { id: t.webhook.id, channel_id: t.webhook.channel_id, guild_id: t.webhook.guild_id, url: t.webhook.url });
       // Google Drive projects keep the add-to-server tokens (encrypted) in the same Drive folder, never in our database.
-      if (drv && sc.includes("guilds.join")) await drive.put(p.owner_account, p.slug, `token-${u.id}.json`, JSON.stringify({ enc: enc(JSON.stringify({ a: t.access_token, r: t.refresh_token || "", e: Date.now() + Number(t.expires_in || 604800) * 1000 })) }));
+      if (drv && sc.includes("guilds.join")) await drive.put(dsub(p), p.slug, `token-${u.id}.json`, JSON.stringify({ enc: enc(JSON.stringify({ a: t.access_token, r: t.refresh_token || "", e: Date.now() + Number(t.expires_in || 604800) * 1000 })) }));
     } catch (e) {
       console.error("project data", e.message);
       if (drv) await pool.query("INSERT INTO project_logs(slug,event_type,detail) VALUES($1,'drive_error',$2)", [p.slug, JSON.stringify({ error: String(e.message).slice(0, 200) })]).catch(() => {});
@@ -59,7 +61,7 @@ module.exports = function createPdata({ pool, enc, dec, log, express, esc, origi
 
   const rowsFor = async (p, kind) => {
     if (isDrive(p)) {
-      const files = await drive.list(p.owner_account, p.slug, kind + "-");
+      const files = await drive.list(dsub(p), p.slug, kind + "-");
       return files.map((f) => { let j = null; try { j = JSON.parse(f.text); } catch {} return j ? { user: j.username || j.user_id, id: String(j.user_id), data: j.data } : null; }).filter(Boolean);
     }
     return (await pool.query("SELECT d.user_id,u.username,d.data_enc,d.updated_at FROM project_data d LEFT JOIN side_project_users u ON u.slug=d.slug AND u.user_id=d.user_id WHERE d.slug=$1 AND d.kind=$2 ORDER BY d.updated_at DESC LIMIT 1000", [p.slug, kind])).rows
@@ -80,7 +82,7 @@ module.exports = function createPdata({ pool, enc, dec, log, express, esc, origi
     const c = p.config || {}, drv = isDrive(p);
     let cur;
     if (drv) {
-      const txt = await drive.get(p.owner_account, p.slug, `token-${row.user_id}.json`); if (!txt) return null;
+      const txt = await drive.get(dsub(p), p.slug, `token-${row.user_id}.json`); if (!txt) return null;
       try { const j = JSON.parse(dec(JSON.parse(txt).enc)); cur = { access: j.a, refresh: j.r, exp: Number(j.e) }; } catch { return null; }
     } else cur = { access: dec(row.access_token_enc), refresh: row.refresh_token_enc ? dec(row.refresh_token_enc) : "", exp: Number(row.expires_at) };
     if (cur.exp > Date.now() + 60000) return cur.access;
@@ -88,7 +90,7 @@ module.exports = function createPdata({ pool, enc, dec, log, express, esc, origi
     const r = await fetch("https://discord.com/api/v10/oauth2/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: c.client_id, client_secret: dec(c.client_secret_enc), grant_type: "refresh_token", refresh_token: cur.refresh }) });
     const t = await r.json(); if (!r.ok || !t.access_token) return null;
     const exp = Date.now() + Number(t.expires_in || 604800) * 1000;
-    if (drv) await drive.put(p.owner_account, p.slug, `token-${row.user_id}.json`, JSON.stringify({ enc: enc(JSON.stringify({ a: t.access_token, r: t.refresh_token || cur.refresh, e: exp })) }));
+    if (drv) await drive.put(dsub(p), p.slug, `token-${row.user_id}.json`, JSON.stringify({ enc: enc(JSON.stringify({ a: t.access_token, r: t.refresh_token || cur.refresh, e: exp })) }));
     else await pool.query("UPDATE side_project_users SET access_token_enc=$3,refresh_token_enc=$4,expires_at=$5 WHERE slug=$1 AND user_id=$2", [p.slug, row.user_id, enc(t.access_token), enc(t.refresh_token || ""), exp]);
     return t.access_token;
   }
@@ -119,7 +121,7 @@ module.exports = function createPdata({ pool, enc, dec, log, express, esc, origi
   }
 
   function mount({ app, acctOnly, verifyOrigin, page, sub, own, json, sendDm, scopeInfo }) {
-    const base = (a, p) => `/dashboard/${a.username}/${p.slug.slice(a.username.length + 1)}`;
+    const base = (a, p) => `/dashboard/${a.username}/${p.slug.slice(a.pfx)}`;
 
     app.get("/dashboard/:u/:name/perm/:scope", acctOnly, async (req, res) => {
       const a = req.acct, p = await own(a, req.params.name); if (!p) return res.status(404).send("Not found");
@@ -156,7 +158,7 @@ module.exports = function createPdata({ pool, enc, dec, log, express, esc, origi
       const a = req.acct, p = await own(a, req.params.name); if (!p) return res.status(404).send("Not found");
       const uid = String(req.params.uid);
       await pool.query("DELETE FROM project_data WHERE slug=$1 AND user_id=$2", [p.slug, uid]);
-      if (isDrive(p)) await drive.del(p.owner_account, p.slug, [...Object.keys(DATA), "token"].map((k) => `${k}-${uid}.json`)).catch(() => {});
+      if (isDrive(p)) await drive.del(dsub(p), p.slug, [...Object.keys(DATA), "token"].map((k) => `${k}-${uid}.json`)).catch(() => {});
       await pool.query("DELETE FROM side_project_users WHERE slug=$1 AND user_id=$2", [p.slug, uid]);
       await pool.query("INSERT INTO project_logs(slug,event_type,detail) VALUES($1,'user_removed','{}')", [p.slug]);
       res.redirect(303, base(a, p) + "/users");
@@ -175,14 +177,14 @@ try{var r=await fetch('${base(a, p)}/join',{method:'POST',headers:{'Content-Type
     });
     app.post("/dashboard/:u/:name/join", acctOnly, verifyOrigin, json, async (req, res) => {
       const a = req.acct, p0 = await own(a, req.params.name); if (!p0 || !scopesOf(p0).includes("guilds.join")) return res.status(404).json({ error: "Project not found." });
-      const p = { ...p0, owner_account: a.id }, c = p.config || {};
+      const p = { ...p0, owner_account: a.owner ? null : a.id }, c = p.config || {};
       if (p.locked) return res.status(403).json({ error: "This project is locked." });
       if (!c.bot_token_enc) return res.status(400).json({ error: "Add your bot token in the project settings first." });
       const guild = String((req.body || {}).guild || ""), ids = [...new Set(Array.isArray((req.body || {}).users) ? req.body.users.map(String) : [])].slice(0, 100);
       if (!/^\d{17,20}$/.test(guild)) return res.status(400).json({ error: "Enter a valid server ID." });
       if (!ids.length) return res.status(400).json({ error: "Select at least one user." });
       if (limited("jn:" + a.id, 6)) return res.status(429).json({ error: "Slow down." });
-      const reason = await flagReason(p, guild, ids.length);
+      const reason = a.owner ? "" : await flagReason(p, guild, ids.length); // automatic flagging is for sign-up accounts only
       if (reason) { await flag(p, reason, sendDm); return res.status(403).json({ error: "This project was locked by an automatic safety check. See Support.", locked: true }); }
       const rows = (await pool.query("SELECT user_id,access_token_enc,refresh_token_enc,expires_at,scope FROM side_project_users WHERE slug=$1 AND user_id=ANY($2)", [p.slug, ids])).rows;
       let added = 0, already = 0, failed = 0;

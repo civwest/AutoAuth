@@ -15,7 +15,8 @@ const SETUP = {
   invite: (u) => [`Share <code>${u}</code>. It sends people to Discord's authorize page for your bot.`],
 };
 
-module.exports = function createAccounts({ pool, enc, dec, log, express, projects, pdata, ownerIdent, twofa, drive, billing, site, esc, isOwnerName = () => false }) {
+const navtree = require("./navtree");
+module.exports = function createAccounts({ pool, enc, dec, log, express, projects, pdata, ownerIdent, twofa, drive, billing, site, esc, isOwnerName = () => false, ownerOk = () => false }) {
   const fp = (req) => crypto.createHash("sha256").update(String(req.get("user-agent") || "unknown")).digest("hex");
   const origin = () => { try { return new URL(process.env.REDIRECT_URI).origin; } catch { return ""; } };
   const hits = new Map();
@@ -125,7 +126,14 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
   }
 
   // ---------- helpers for dashboards ----------
+  // The main dashboard's own projects use the same per-project pages at /dashboard/projects/<name>/<tab>.
+  // They are shown with a stand-in account: its handle is "projects" and its project names are not prefixed.
+  const OWNER_CTX = { owner: true, id: "0", username: "projects", pfx: 0 };
   const acctOnly = async (req, res, next) => {
+    if (req.params.u === "projects" && req.params.name) {
+      if (!ownerOk(req)) return next("route");
+      req.acct = OWNER_CTX; req.navProjects = []; return next();
+    }
     if (RESERVED.has(req.params.u)) return next("route"); // /dashboard/dm, /dashboard/users... belong to the main dashboard
     const s = req.session && req.session.acct;
     if (!s) return res.redirect(303, "/signup");
@@ -136,19 +144,32 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
     if (!(await billing.hasCustomer(a.id)) && a.email) await billing.refresh(a.id, a.email);
     req.billing = await billing.hasCustomer(a.id);
     req.unread = (await pool.query("SELECT COUNT(*)::int n FROM support_messages WHERE account_id=$1 AND from_admin AND NOT read_user", [a.id])).rows[0].n;
-    req.acct = a; next();
+    req.navProjects = (await pool.query("SELECT slug,name,type,config FROM side_projects WHERE owner_account=$1 ORDER BY created_at DESC", [a.id])).rows;
+    a.pfx = a.username.length + 1; req.acct = a; next();
   };
 
-  function mountDash({ app, renderFor, verifyOrigin, sendDm }) {
+  // Tabs of one project: Setup, Users (when it stores users), one tab per selected permission, Logs.
+  const projTabs = (p) => [["setup", "Setup"], ...(p.type === "oauth" && (p.config || {}).store ? [["users", "Users"]] : []), ...pdata.tabsFor(p), ["logs", "Logs"]];
+  // Sidebar tree of the main dashboard's own projects.
+  async function ownerTree(req) {
+    const rows = (await pool.query("SELECT slug,name,type,config FROM side_projects WHERE owner_account IS NULL ORDER BY created_at DESC")).rows;
+    return navtree.tree(rows.map((p) => ({ name: p.name, base: `/dashboard/projects/${p.slug}`, tabs: projTabs(p) })), navtree.hereOf(req), esc);
+  }
+
+  function mountDash({ app, renderFor, render: renderOwner, verifyOrigin, sendDm }) {
     const json = express.json({ limit: "100kb" });
-    const nav = (a, tab, unread, bill) => {
+    const nav = (a, tab, unread, bill, req) => {
       const l = (k, h, t) => `<a class="${tab === k ? "on" : ""}" href="${h}">${t}</a>`;
-      return l("projects", `/dashboard/${a.username}`, "Projects") + l("support", `/dashboard/${a.username}/support`, "Support" + (unread ? ` (${unread})` : "")) + l("profile", `/dashboard/${a.username}/profile`, "Profile") + (bill ? l("billing", `/dashboard/${a.username}/billing`, "Billing") : `<a href="/subscribe">Plans</a>`);
+      const mine = `/dashboard/${a.username}`;
+      const tree = navtree.tree(((req && req.navProjects) || []).map((p) => ({ name: p.name, base: `${mine}/${p.slug.slice(a.pfx)}`, tabs: projTabs(p) })), navtree.hereOf(req), esc);
+      return l("projects", mine, "Projects") + tree + l("support", `${mine}/support`, "Support" + (unread ? ` (${unread})` : "")) + l("profile", `${mine}/profile`, "Profile") + (bill ? l("billing", `${mine}/billing`, "Billing") : `<a href="/subscribe">Plans</a>`);
     };
-    const page = (req, res, tab, content) => renderFor(req, res, tab, content, { nav: nav(req.acct, tab, tab === "support" ? 0 : req.unread, req.billing), who: req.acct.username, whoHref: `/dashboard/${req.acct.username}/profile`, logout: "/account/logout" });
-    const full = (a, name) => `${a.username}/${name}`;
-    const own = async (a, name) => (await pool.query("SELECT slug,name,type,config,locked,owner_account FROM side_projects WHERE slug=$1 AND owner_account=$2", [full(a, String(name)), a.id])).rows[0];
-    const short = (a, p) => ({ ...p, slug: p.slug.slice(a.username.length + 1) });
+    const page = (req, res, tab, content) => req.acct.owner ? renderOwner(req, res, "projects", content) : renderFor(req, res, tab, content, { nav: nav(req.acct, tab, tab === "support" ? 0 : req.unread, req.billing, req), who: req.acct.username, whoHref: `/dashboard/${req.acct.username}/profile`, logout: "/account/logout" });
+    const full = (a, name) => (a.owner ? String(name) : `${a.username}/${name}`);
+    const own = async (a, name) => a.owner
+      ? (await pool.query("SELECT slug,name,type,config,locked,owner_account,created_by FROM side_projects WHERE slug=$1 AND owner_account IS NULL", [String(name)])).rows[0]
+      : (await pool.query("SELECT slug,name,type,config,locked,owner_account,created_by FROM side_projects WHERE slug=$1 AND owner_account=$2", [full(a, String(name)), a.id])).rows[0];
+    const short = (a, p) => ({ ...p, slug: p.slug.slice(a.pfx) });
 
     // Google Drive storage needs a connected Drive. Free for everyone.
     const needDrive = async (id, config) => {
@@ -208,8 +229,8 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
     // per-project dashboard: Setup, Users (when storing), Logs
     const sub = (a, p, tab) => {
       const stores = p.type === "oauth" && (p.config || {}).store;
-      const t = (k, l) => `<a class="btn ${tab === k ? "" : "secondary"}" href="/dashboard/${a.username}/${esc(p.slug.slice(a.username.length + 1))}/${k}">${l}</a>`;
-      return `<div class="top"><div><a class="muted" href="/dashboard/${a.username}">← Projects</a><h1 style="margin:6px 0">${esc(p.name)}</h1></div><div class="row" style="gap:8px;flex-wrap:wrap">${t("setup", "Setup")}${stores ? t("users", "Users") : ""}${pdata.tabsFor(p).map(([k, l]) => t(k, l)).join("")}${t("logs", "Logs")}</div></div>${p.locked ? '<div class="card" style="border-color:#e0556a"><b>This project is locked.</b> Check Support for details.</div>' : ""}`;
+      const t = (k, l) => `<a class="btn ${tab === k ? "" : "secondary"}" href="/dashboard/${a.username}/${esc(p.slug.slice(a.pfx))}/${k}">${l}</a>`;
+      return `<div class="top"><div><a class="muted" href="${a.owner ? "/dashboard/projects" : `/dashboard/${a.username}`}">← ${a.owner ? "Side Projects" : "Projects"}</a><h1 style="margin:6px 0">${esc(p.name)}</h1></div><div class="row" style="gap:8px;flex-wrap:wrap">${projTabs(p).map(([k, l]) => t(k, l)).join("")}</div></div>${p.locked ? '<div class="card" style="border-color:#e0556a"><b>This project is locked.</b> Check Support for details.</div>' : ""}`;
     };
     app.get("/dashboard/:u/:name/setup", acctOnly, async (req, res) => {
       const p = await own(req.acct, req.params.name); if (!p) return res.status(404).send("Not found");
@@ -228,7 +249,7 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
     });
     app.get("/dashboard/:u/:name/logs", acctOnly, async (req, res) => {
       const a = req.acct, p = await own(a, req.params.name); if (!p) return res.status(404).send("Not found");
-      const L = await billing.limits(req.acct.id);
+      const L = a.owner ? { logDays: 365 } : await billing.limits(req.acct.id);
       const r = (await pool.query("SELECT event_type,detail,created_at FROM project_logs WHERE slug=$1 AND created_at>NOW()-make_interval(days=>$2) ORDER BY id DESC LIMIT 200", [p.slug, L.logDays])).rows;
       page(req, res, "projects", sub(a, p, "logs") + `<div class="card"><div class="wrap"><table class="stack"><tr><th>Time (UTC)</th><th>Event</th><th>Details</th></tr>${r.map((x) => `<tr><td data-l="Time">${esc(new Date(x.created_at).toISOString().slice(0, 19).replace("T", " "))}</td><td data-l="Event">${esc(x.event_type)}</td><td data-l="Details"><code style="word-break:break-all">${esc(JSON.stringify(x.detail))}</code></td></tr>`).join("") || '<tr><td colspan="3">No events yet.</td></tr>'}</table></div></div>`);
     });
@@ -374,5 +395,5 @@ poll();setInterval(poll,4000);})();`;
   // Signed-in accounts that open /dashboard land on their own dashboard.
   const landing = (req) => (req.session && req.session.acct && !req.session.owner ? "/dashboard/" + req.session.acct.username : null);
 
-  return { social, socialButtons, accountDiscord, accountLogin, passwordLogin, start, finishLogin, authPage, discordLink, mountPublic, mountDash, mountAdmin, landing };
+  return { drive, ownerTree, projTabs, social, socialButtons, accountDiscord, accountLogin, passwordLogin, start, finishLogin, authPage, discordLink, mountPublic, mountDash, mountAdmin, landing };
 };

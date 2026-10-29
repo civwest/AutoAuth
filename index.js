@@ -102,6 +102,7 @@ async function schema() {
  CREATE TABLE IF NOT EXISTS project_flags(id BIGSERIAL PRIMARY KEY, slug TEXT NOT NULL, account_id BIGINT, project_name TEXT, reason TEXT NOT NULL, affected INT NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'open', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  CREATE TABLE IF NOT EXISTS flag_reports(id BIGSERIAL PRIMARY KEY, flag_id BIGINT NOT NULL REFERENCES project_flags(id) ON DELETE CASCADE, contact TEXT, body TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  CREATE TABLE IF NOT EXISTS totp_secrets(kind TEXT NOT NULL, ident TEXT NOT NULL, secret_enc TEXT NOT NULL, recovery JSONB NOT NULL DEFAULT '[]', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY(kind,ident));
+ CREATE TABLE IF NOT EXISTS owner_drive_links(owner_key TEXT PRIMARY KEY, email TEXT, refresh_enc TEXT NOT NULL, folders JSONB NOT NULL DEFAULT '{}', linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  CREATE TABLE IF NOT EXISTS drive_links(account_id BIGINT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE, email TEXT, refresh_enc TEXT NOT NULL, folders JSONB NOT NULL DEFAULT '{}', linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  CREATE TABLE IF NOT EXISTS subscriptions(subscription_id TEXT PRIMARY KEY, customer_id TEXT NOT NULL, account_id BIGINT REFERENCES accounts(id) ON DELETE SET NULL, tier INT NOT NULL DEFAULT 0, status TEXT NOT NULL, months INT, period_end BIGINT, trial_end BIGINT, cancel_at_period_end BOOLEAN NOT NULL DEFAULT false, email TEXT NOT NULL DEFAULT '', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
  CREATE INDEX IF NOT EXISTS subscriptions_account ON subscriptions(account_id);
@@ -346,11 +347,11 @@ const ownerIdent={
  async unlink(key,provider){await pool.query("DELETE FROM owner_identities WHERE owner_key=$1 AND provider=$2",[key,provider]);},
  async login(req,owner,provider){return enterOwner(req,owner,provider);}
 };
-const drive=require("./drive")({pool,enc,dec,log,esc,origin:()=>{try{return new URL(process.env.REDIRECT_URI).origin;}catch{return "";}},limited,save:req=>new Promise(ok=>req.session.save(ok))});
+const drive=require("./drive")({pool,enc,dec,log,esc,origin:()=>{try{return new URL(process.env.REDIRECT_URI).origin;}catch{return "";}},limited,save:req=>new Promise(ok=>req.session.save(ok)),ownerAny:req=>!!(req.session&&req.session.owner&&owners.some(x=>x.user===req.session.owner)&&req.session.deviceFingerprint&&equal(req.session.deviceFingerprint,deviceFingerprint(req)))});
 const billing=require("./billing")({pool,log,esc,origin:()=>{try{return new URL(process.env.REDIRECT_URI).origin;}catch{return "";}},express,authPage:(...a)=>accounts.authPage(...a),limited});
 const pdata=require("./pdata")({pool,enc,dec,log,express,esc,site,drive,origin:()=>{try{return new URL(process.env.REDIRECT_URI).origin;}catch{return "";}}});
-const projects=require("./projects")({pool,enc,dec,log,express,collect:pdata.collect,dataScopes:pdata.DATA_SCOPES,limits:billing}); projects.mountPublic({app,site}); // /projects/<name>/... and /projects/<user>/<name>/...
-const accounts=require("./accounts")({pool,enc,dec,log,express,projects,pdata,ownerIdent,twofa,drive,billing,site,esc,isOwnerName:u=>owners.some(o=>o.user.toLowerCase()===String(u).toLowerCase())}); accounts.mountPublic(app);
+const projects=require("./projects")({pool,enc,dec,log,express,collect:pdata.collect,dataScopes:pdata.DATA_SCOPES,limits:billing,drive}); projects.mountPublic({app,site}); // /projects/<name>/... and /projects/<user>/<name>/...
+const accounts=require("./accounts")({pool,enc,dec,log,express,projects,pdata,ownerIdent,twofa,drive,billing,site,esc,isOwnerName:u=>owners.some(o=>o.user.toLowerCase()===String(u).toLowerCase()),ownerOk:req=>{const o=req.session&&req.session.owner&&owners.find(x=>x.user===req.session.owner);return !!(o&&o.perms&&o.perms.has("projects")&&req.session.deviceFingerprint&&equal(req.session.deviceFingerprint,deviceFingerprint(req)));}}); accounts.mountPublic(app);
 require("./auth")(app,{site,pool,enc,log,equal,verifyOrigin,optOutUser,dashDiscord,accountDiscord:accounts.accountDiscord,accountLogin:accounts.accountLogin,loginRedirect:LOGIN_REDIRECT}); // /auth, /auth/start, /oauth/callback
 
 const DISCORD_PATH=require("./icons").discord;
