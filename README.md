@@ -301,3 +301,9 @@ On the Free plan a project's public pages (authorization result, Terms, Privacy)
 The main dashboard profile also has a Google Drive card, so your own projects can store data in your Drive.
 
 **Separate Drive client:** set `GOOGLE_DRIVE_CLIENT_ID` and `GOOGLE_DRIVE_CLIENT_SECRET` to use a different Google Cloud project for Drive. Its only redirect URI is `https://<your domain>/auth/google/drive/callback`. Without them, Drive uses the sign-in client.
+
+### Dashboard look and friendlier project pages
+
+Both dashboards (the owner dashboard and the sign-up account dashboard) use the same look as the plans page: black background, light-gray rounded cards, white buttons. On desktop the sidebar has a collapse button (top of the sidebar) and a round button to bring it back; the choice is remembered in the browser. Signed-in accounts see the plans page inside their dashboard, sidebar included; visitors who are not signed in see the plain plans page.
+
+Project pages have a status line (type, storage, locked), a one-line hint per tab, a setup checklist with progress and Copy buttons, a friendly empty state on the Projects page, and a short help line under each field in the project editor.

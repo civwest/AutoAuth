@@ -130,7 +130,7 @@ ${p.discord ? `<h3>Discord</h3><p>${discordHref(p.discord) ? `<a href="${esc(dis
 
 <dialog id="dlg-crop" class="crop-dlg"><div class="cr-head">Edit Image</div>
 <div class="cr-stage"><div class="crop-wrap" id="cr-wrap"><canvas id="cr-cv"></canvas><div class="crop-mask" id="cr-mask"></div></div></div>
-<div class="cr-zoom"><svg viewBox="0 0 24 24" width="16" height="16" fill="#9da7b3"><path d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2zM8.5 13.5l2.5 3 3.5-4.5 4.5 6H5l3.5-4.5z"/></svg><input type="range" id="cr-zoom" min="0" max="100" value="0"><svg viewBox="0 0 24 24" width="26" height="26" fill="#9da7b3"><path d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2zM8.5 13.5l2.5 3 3.5-4.5 4.5 6H5l3.5-4.5z"/></svg></div>
+<div class="cr-zoom"><svg viewBox="0 0 24 24" width="16" height="16" fill="#a1a1aa"><path d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2zM8.5 13.5l2.5 3 3.5-4.5 4.5 6H5l3.5-4.5z"/></svg><input type="range" id="cr-zoom" min="0" max="100" value="0"><svg viewBox="0 0 24 24" width="26" height="26" fill="#a1a1aa"><path d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2zM8.5 13.5l2.5 3 3.5-4.5 4.5 6H5l3.5-4.5z"/></svg></div>
 <div class="cr-foot"><button type="button" class="secondary" onclick="closeAll()">Cancel</button><button type="button" class="dbtn" id="cr-ok">Apply</button></div></dialog>
 <script>${EDIT_JS}</script>`;
     render(req, res, "profile", content);

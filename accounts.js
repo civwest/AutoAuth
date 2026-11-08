@@ -6,6 +6,14 @@ const { weakPassword } = require("./security");
 const RESERVED = new Set(["users", "servers", "dm", "logs", "projects", "support", "messages", "discord", "database", "presence", "shutdown", "restart", "roles", "admin", "login", "logout", "signup", "account", "api", "oauth", "auth", "channels", "profile", "static", "public"]);
 const NAME = /^[a-z0-9](?:[a-z0-9-]{1,18}[a-z0-9])$/;
 
+const HINT = {
+  setup: "Follow the checklist below to get this project working. Tick-marks appear as you complete each step.",
+  users: "People who authorized this project. Remove someone to delete their stored data.",
+  logs: "Recent things that happened in this project.",
+  join: "Pick the people to add, then choose which of your bot's servers to add them to.",
+  data: "Information collected from the people who authorized this project. You can download it as a CSV.",
+  perm: "Tools for the permissions you picked.",
+};
 const SETUP = {
   oauth: (u) => [`In the Discord Developer Portal open your application > OAuth2 > Redirects and add <code>${u}</code>.`, "Build your authorize link with the same redirect URI and send people to it. Authorized users show up in the Users tab when storing is on."],
   interactions: (u) => [`Developer Portal > your application > General Information > Interactions Endpoint URL: <code>${u}</code>.`, "Copy the application's public key from the same page into this project. Discord checks the endpoint when you save."],
@@ -162,9 +170,10 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
       const l = (k, h, t) => `<a class="${tab === k ? "on" : ""}" href="${h}">${t}</a>`;
       const mine = `/dashboard/${a.username}`;
       const tree = navtree.tree(((req && req.navProjects) || []).map((p) => ({ name: p.name, base: `${mine}/${p.slug.slice(a.pfx)}`, tabs: projTabs(p) })), navtree.hereOf(req), esc);
-      return l("projects", mine, "Projects") + tree + l("support", `${mine}/support`, "Support" + (unread ? ` (${unread})` : "")) + l("profile", `${mine}/profile`, "Profile") + (bill ? l("billing", `${mine}/billing`, "Billing") : `<a href="/subscribe">Plans</a>`);
+      return l("projects", mine, "Projects") + tree + l("support", `${mine}/support`, "Support" + (unread ? ` (${unread})` : "")) + l("profile", `${mine}/profile`, "Profile") + l("plans", "/subscribe", "Plans") + (bill ? l("billing", `${mine}/billing`, "Billing") : "");
     };
     const page = (req, res, tab, content) => req.acct.owner ? renderOwner(req, res, "projects", content) : renderFor(req, res, tab, content, { nav: nav(req.acct, tab, tab === "support" ? 0 : req.unread, req.billing, req), who: req.acct.username, whoHref: `/dashboard/${req.acct.username}/profile`, logout: "/account/logout" });
+    billing.setChrome((req, res, content) => acctOnly(req, res, () => page(req, res, "plans", content)));
     const full = (a, name) => (a.owner ? String(name) : `${a.username}/${name}`);
     const own = async (a, name) => a.owner
       ? (await pool.query("SELECT slug,name,type,config,locked,owner_account,created_by FROM side_projects WHERE slug=$1 AND owner_account IS NULL", [String(name)])).rows[0]
@@ -230,7 +239,7 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
     const sub = (a, p, tab) => {
       const stores = p.type === "oauth" && (p.config || {}).store;
       const t = (k, l) => `<a class="btn ${tab === k ? "" : "secondary"}" href="/dashboard/${a.username}/${esc(p.slug.slice(a.pfx))}/${k}">${l}</a>`;
-      return `<div class="top"><div><a class="muted" href="${a.owner ? "/dashboard/projects" : `/dashboard/${a.username}`}">← ${a.owner ? "Side Projects" : "Projects"}</a><h1 style="margin:6px 0">${esc(p.name)}</h1></div><div class="row" style="gap:8px;flex-wrap:wrap">${projTabs(p).map(([k, l]) => t(k, l)).join("")}</div></div>${p.locked ? '<div class="card" style="border-color:#e0556a"><b>This project is locked.</b> Check Support for details.</div>' : ""}`;
+      return `<div class="top"><div><a class="muted" href="${a.owner ? "/dashboard/projects" : `/dashboard/${a.username}`}">← ${a.owner ? "Side Projects" : "Projects"}</a><h1 style="margin:6px 0">${esc(p.name)}</h1><div class="chips"><span class="chip">${esc((projects.TYPES[p.type] || {}).label || p.type)}</span>${stores ? `<span class="chip">Stores data in ${(p.config || {}).storage === "drive" ? "Google Drive" : "our database"}</span>` : ""}${p.locked ? '<span class="chip warn">Locked</span>' : ""}</div>${HINT[tab.split("/")[0]] ? `<p class="hint">${HINT[tab.split("/")[0]]}</p>` : ""}</div><div class="row" style="gap:8px;flex-wrap:wrap">${projTabs(p).map(([k, l]) => t(k, l)).join("")}</div></div>${p.locked ? '<div class="card" style="border-color:#e0556a"><b>This project is locked.</b> Check Support for details.</div>' : ""}`;
     };
     app.get("/dashboard/:u/:name/setup", acctOnly, async (req, res) => {
       const p = await own(req.acct, req.params.name); if (!p) return res.status(404).send("Not found");
@@ -240,12 +249,24 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
       if (p.type === "oauth" && c.client_id) { const q = new URLSearchParams({ client_id: c.client_id, response_type: "code", redirect_uri: url }); q.set("scope", chosen.join(" ") || "identify"); link = "https://discord.com/oauth2/authorize?" + q; }
       if (p.type === "invite") link = url;
       const notes = chosen.map((k) => projects.SCOPES.find((s) => s[0] === k)).filter(Boolean);
-      page(req, res, "projects", sub(req.acct, p, "setup") + `<div class="card"><h2>Setup</h2><ol>${steps.map((s) => `<li style="margin:8px 0">${s}</li>`).join("")}</ol>${link && p.type === "oauth" ? `<h3>Authorize link</h3><p><code style="word-break:break-all">${esc(link)}</code></p>` : ""}</div>${notes.length ? `<div class="card" style="margin-top:16px"><h2>Permissions</h2>${notes.map((s) => `<p style="margin:10px 0"><b>${esc(s[0])}</b>: ${esc(s[1])}${s[3] ? " <i>(needs Discord approval)</i>" : ""}<br><span class="muted">${esc(s[2])}</span></p>`).join("")}</div>` : ""}${pdata.storageCard(req.acct, p)}`);
+      const count = p.type === "oauth" ? (await pool.query("SELECT COUNT(*)::int n FROM side_project_users WHERE slug=$1", [p.slug])).rows[0].n : 0;
+      const needsBot = chosen.some((k) => projects.NEEDS_BOT.includes(k)), copy = (txt) => `<button type="button" class="secondary" data-c="${esc(txt)}" onclick="aaCopy(this)">Copy</button>`;
+      const items = [];
+      items.push({ t: "Add the redirect URL in Discord", b: p.type === "oauth" ? "Developer Portal > your application > OAuth2 > Redirects. Paste this exact address and save." : "Use this address in the Developer Portal where it is asked for.", c: `<code style="word-break:break-all">${esc(url)}</code>`, act: copy(url) });
+      if (p.type === "oauth") {
+        items.push({ t: "Choose the permissions to ask for", done: chosen.length > 0, b: chosen.length ? `${chosen.length} chosen. Change them any time with Edit on the Projects page.` : "Open the Projects page, press Edit and tick what you need. Always include identify." });
+        if (needsBot) items.push({ t: "Add your bot token", done: !!(p.config || {}).bot_token_enc, b: "A permission you picked needs your bot. Press Edit on the Projects page and paste the bot token (Developer Portal > Bot > Reset Token). It is stored encrypted." });
+        items.push({ t: "Share your authorize link", b: link ? "Send people this link. After they approve, they show up in the Users tab." : "Add your client ID first, then your link appears here.", c: link ? `<code style="word-break:break-all">${esc(link)}</code>` : "", act: link ? copy(link) : "" });
+        items.push({ t: "Get your first authorized person", done: count > 0, b: count > 0 ? `${count} ${count === 1 ? "person has" : "people have"} authorized so far.` : "Try the link yourself to see it work." });
+      } else steps.forEach((s, n) => { if (n) items.push({ t: s, b: "" }); });
+      const done = items.filter((x) => x.done).length, tracked = items.filter((x) => x.done !== undefined).length;
+      const list = items.map((x, n) => `<div class="step${x.done ? " done" : ""}"><div class="n">${x.done ? "&#10003;" : n + 1}</div><div style="min-width:0"><b>${x.t}</b>${x.b ? `<p class="muted">${esc(x.b)}</p>` : ""}${x.c ? `<div style="margin-top:6px">${x.c}</div>` : ""}${x.act ? `<div class="acts2">${x.act}</div>` : ""}</div></div>`).join("");
+      page(req, res, "projects", sub(req.acct, p, "setup") + `<div class="card"><h2 style="margin:0">Setup checklist</h2>${tracked ? `<div class="progress"><i style="width:${Math.round(100 * done / tracked)}%"></i></div><p class="muted" style="margin:0 0 6px">${done} of ${tracked} checked steps done</p>` : ""}${list}<details style="margin-top:10px"><summary class="muted" style="cursor:pointer">Show the Discord Developer Portal steps in detail</summary><ol>${steps.map((s) => `<li style="margin:8px 0">${s}</li>`).join("")}</ol></details></div>${notes.length ? `<div class="card" style="margin-top:16px"><h2>Permissions</h2>${notes.map((s) => `<p style="margin:10px 0"><b>${esc(s[0])}</b>: ${esc(s[1])}${s[3] ? " <i>(needs Discord approval)</i>" : ""}<br><span class="muted">${esc(s[2])}</span></p>`).join("")}</div>` : ""}${pdata.storageCard(req.acct, p)}<script>function aaCopy(b){var t=b.dataset.c,d=function(){var o=b.textContent;b.textContent=\'Copied\';setTimeout(function(){b.textContent=o;},1500);};if(navigator.clipboard)navigator.clipboard.writeText(t).then(d,function(){prompt(\'Copy this:\',t);});else prompt(\'Copy this:\',t);}</script>`);
     });
     app.get("/dashboard/:u/:name/users", acctOnly, async (req, res) => {
       const a = req.acct, p = await own(a, req.params.name); if (!p) return res.status(404).send("Not found");
       const r = (await pool.query("SELECT user_id,username,scope,created_at FROM side_project_users WHERE slug=$1 ORDER BY created_at DESC LIMIT 500", [p.slug])).rows;
-      page(req, res, "projects", sub(a, p, "users") + `<div class="card"><div class="wrap"><table class="stack"><tr><th>User</th><th>ID</th><th>Scopes</th><th>Added</th><th></th></tr>${r.map((x) => `<tr><td data-l="User">${esc(x.username)}</td><td data-l="ID">${esc(x.user_id)}</td><td data-l="Scopes">${esc(x.scope)}</td><td data-l="Added">${esc(new Date(x.created_at).toISOString().slice(0, 16).replace("T", " "))}</td><td class="actcell"><form method="post" action="/dashboard/${esc(a.username)}/${esc(req.params.name)}/users/${esc(x.user_id)}/delete" onsubmit="return confirm('Remove this user and their data?')" style="margin:0"><button class="danger" style="width:auto">Remove</button></form></td></tr>`).join("") || '<tr><td colspan="5">No users yet.</td></tr>'}</table></div></div>`);
+      page(req, res, "projects", sub(a, p, "users") + `<div class="card"><div class="wrap"><table class="stack"><tr><th>User</th><th>ID</th><th>Scopes</th><th>Added</th><th></th></tr>${r.map((x) => `<tr><td data-l="User">${esc(x.username)}</td><td data-l="ID">${esc(x.user_id)}</td><td data-l="Scopes">${esc(x.scope)}</td><td data-l="Added">${esc(new Date(x.created_at).toISOString().slice(0, 16).replace("T", " "))}</td><td class="actcell"><form method="post" action="/dashboard/${esc(a.username)}/${esc(req.params.name)}/users/${esc(x.user_id)}/delete" onsubmit="return confirm('Remove this user and their data?')" style="margin:0"><button class="danger" style="width:auto">Remove</button></form></td></tr>`).join("") || '<tr><td colspan="5" class="muted">Nobody has authorized this project yet. Share your authorize link from the Setup tab.</td></tr>'}</table></div></div>`);
     });
     app.get("/dashboard/:u/:name/logs", acctOnly, async (req, res) => {
       const a = req.acct, p = await own(a, req.params.name); if (!p) return res.status(404).send("Not found");

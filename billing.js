@@ -202,7 +202,7 @@ module.exports = function createBilling({ pool, log, esc, origin, express, authP
   // ---------- pages ----------
   const CSS = `[hidden]{display:none!important}:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#000;color:#fff;font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}a{color:inherit}
 .top{display:flex;justify-content:space-between;align-items:center;padding:18px 24px}.top a{text-decoration:none;font-weight:700}.top .r a{font-weight:600;color:#d1d5db;margin-left:16px}
-main{max-width:1120px;margin:0 auto;padding:12px 16px 56px}h1{font-size:clamp(28px,5vw,40px);margin:12px 0 6px;text-align:center}.lead{color:#b9bcc2;text-align:center;margin:0 auto 22px;max-width:640px}
+.pmain{max-width:1120px;margin:0 auto;padding:12px 16px 56px}h1{font-size:clamp(28px,5vw,40px);margin:12px 0 6px;text-align:center}.lead{color:#b9bcc2;text-align:center;margin:0 auto 22px;max-width:640px}
 .bar{display:flex;justify-content:center;margin:0 0 26px;position:relative}.dd{position:relative}.dd>button{background:#2b2b2e;color:#fff;border:1px solid #3d3d41;border-radius:12px;padding:11px 18px;font:600 15px system-ui;cursor:pointer;display:flex;gap:10px;align-items:center;min-width:170px;justify-content:space-between}
 .dd>button:hover{background:#343438}.dd ul{position:absolute;left:0;right:0;top:calc(100% + 6px);margin:0;padding:6px;list-style:none;background:#1c1c1f;border:1px solid #3d3d41;border-radius:12px;z-index:5;box-shadow:0 12px 30px #000a}
 .dd li{padding:9px 12px;border-radius:8px;cursor:pointer}.dd li:hover,.dd li:focus,.dd li[aria-selected=true]{background:#2f2f33;outline:0}.dd li small{color:#8f939a;margin-left:6px}
@@ -216,6 +216,9 @@ ul.perks{list-style:none;margin:22px 0 0;padding:0;display:flex;flex-direction:c
 .card{max-width:460px;margin:8vh auto;border:1px solid #d1d5db;border-radius:20px;padding:28px}.card input{width:100%;padding:12px;border-radius:10px;border:1px solid #3d3d41;background:#111;color:#fff;font-size:16px;margin:8px 0 14px}.card .sub{margin-top:6px}.err{color:#ff8a8a}`;
   const shell = (title, body, who) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><link rel="icon" type="image/webp" href="/assets/icon.webp"><style>${CSS}${siteMod.FOOTER_CSS}</style></head><body><div class="top"><a href="/">AutoAuth</a><div class="r">${who ? `<a href="/dashboard/${esc(who)}">Dashboard</a>` : '<a href="/login">Log in</a><a href="/signup">Sign up</a>'}</div></div>${body}${siteMod.footerHtml()}</body></html>`;
 
+  // Signed-in accounts see the plans page inside their dashboard (sidebar included); accounts.js supplies the wrapper.
+  let chrome = null;
+  const scopeCss = (css, p) => css.replace(/(^|\}|@media[^{]*\{)\s*([^{}@][^{}]*)\{/g, (m, a, sel) => a + sel.split(",").map((x) => p + " " + x.trim()).join(",") + "{");
   async function pricingPage(req, res) {
     const cc = countryOf(req, res), code = CUR[cc] || "CAD", r = await ratesNow(), rate = r[code] || 1, shownCode = r[code] ? code : "CAD";
     const s = req.session && req.session.acct, cur = s ? await tierOf(s.id) : 0;
@@ -225,12 +228,12 @@ ul.perks{list-style:none;margin:22px 0 0;padding:0;display:flex;flex-direction:c
 <div class="price" data-price></div><div class="bill" data-bill></div>
 <a class="sub" data-sub href="/subscribe/go?tier=${t}&term=1">${cur === t ? "Current plan" : "Subscribe"}</a>
 <ul class="perks">${PERKS[t].map(([i, txt]) => `<li${i === "gift" ? " data-trial" : ""}>${icon(i)}<span>${esc(txt)}</span></li>`).join("")}</ul></article>`).join("");
-    const body = `<main><h1>Choose your plan</h1><p class="lead">Every plan gives you more room and extras. Nothing about how AutoAuth works is held back from free accounts.</p>
+    const body = `<section class="pmain"><h1>Choose your plan</h1><p class="lead">Every plan gives you more room and extras. Nothing about how AutoAuth works is held back from free accounts.</p>
 <div class="bar"><div class="dd" id="dd"><button type="button" id="dd-btn" aria-haspopup="listbox" aria-expanded="false"><span id="dd-lab">1 month</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></button>
 <ul id="dd-list" role="listbox" hidden><li role="option" tabindex="0" data-m="1" aria-selected="true">1 month</li><li role="option" tabindex="0" data-m="3">3 months <small>save ~4%</small></li><li role="option" tabindex="0" data-m="6">6 months <small>save ~11%</small></li><li role="option" tabindex="0" data-m="12">1 year <small>save ~17%</small></li></ul></div></div>
 <div class="grid">${cards}</div>
 <div class="free">${icon("cloud")}<div><b>Google Drive storage is free on every plan.</b><div style="color:#b9bcc2">Save your project data to your own Google Drive with no limits from us, whether or not you subscribe.</div></div></div>
-<p class="fine">Prices are set in CAD${shownCode === "CAD" ? "" : ` and shown here as an estimate in ${shownCode} (live exchange rate)`}. Your card is charged by Stripe; the exact amount is shown at checkout. Use the same email you use on AutoAuth, so your subscription finds your account. Cancel any time from the Billing tab.</p></main>
+<p class="fine">Prices are set in CAD${shownCode === "CAD" ? "" : ` and shown here as an estimate in ${shownCode} (live exchange rate)`}. Your card is charged by Stripe; the exact amount is shown at checkout. Use the same email you use on AutoAuth, so your subscription finds your account. Cancel any time from the Billing tab.</p></section>
 <script type="application/json" id="pd">${JSON.stringify(data).replace(/</g, "\\u003c")}</script>
 <script>(function(){var D=JSON.parse(document.getElementById('pd').textContent),term=1;
 function fmt(n,c){try{return new Intl.NumberFormat(undefined,{style:'currency',currency:c,maximumFractionDigits:(c==='JPY'||c==='KRW'||c==='HUF'||c==='IDR')?0:2}).format(n);}catch(e){return c+' '+n.toFixed(2);}}
@@ -249,7 +252,9 @@ list.addEventListener('keydown',function(e){var li=document.activeElement;if(e.k
 function pick(li){term=Number(li.dataset.m);[].forEach.call(list.children,function(x){x.setAttribute('aria-selected',x===li?'true':'false');});lab.textContent=li.firstChild.textContent.trim();open(false);btn.focus();render();}
 document.addEventListener('click',function(e){if(!document.getElementById('dd').contains(e.target))open(false);});
 render();})();</script>`;
-    res.set("Cache-Control", "private, no-store").send(shell("AutoAuth Plans", body, s && s.username));
+    res.set("Cache-Control", "private, no-store");
+    if (s && chrome) { try { return await chrome(req, res, `<style>${scopeCss(CSS, "#plans")}</style><div id="plans">${body}</div>`); } catch (e) { console.error("plans chrome", e.message); } }
+    res.send(shell("AutoAuth Plans", body, s && s.username));
   }
 
   function mountPublic(app) {
@@ -325,5 +330,5 @@ render();})();</script>`;
     });
   }
 
-  return { PLANS, PRICES, mountPublic, mountDash, limits, tierOf, canStore, usage, hasCustomer, claimByEmail, verifySig, handle, sendReceipt, sync, refresh, fromCheckout, linkFor, EMAIL, subRow };
+  return { setChrome: (f) => { chrome = f; }, PLANS, PRICES, mountPublic, mountDash, limits, tierOf, canStore, usage, hasCustomer, claimByEmail, verifySig, handle, sendReceipt, sync, refresh, fromCheckout, linkFor, EMAIL, subRow };
 };

@@ -271,3 +271,8 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 
 ## v1.6.9
 - The black "About AutoAuth" footer bar is now on the plans page (and the other billing pages).
+
+## v1.7.0
+- **New dashboard theme** for both dashboards, matching the plans page (black, light-gray rounded cards, white buttons).
+- **Collapsible sidebar on desktop**, remembered per browser. The plans page now shows the sidebar for signed-in accounts (Plans is in the sidebar).
+- **Friendlier project pages:** setup checklist with progress and Copy buttons, status chips and a hint on every project tab, empty states, help text under each editor field, page content now starts at the top instead of being vertically centred.
