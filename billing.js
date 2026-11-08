@@ -4,6 +4,7 @@
 //   Google Drive storage is NOT part of any plan: it is free and identical for everyone.
 //   Plans raise the database-storage and project limits and add extras.
 const crypto = require("node:crypto");
+const siteMod = require("./site");
 
 // Prices are in CAD: [total for the term, per-month equivalent].
 const PRICES = {
@@ -213,7 +214,7 @@ main{max-width:1120px;margin:0 auto;padding:12px 16px 56px}h1{font-size:clamp(28
 ul.perks{list-style:none;margin:22px 0 0;padding:0;display:flex;flex-direction:column;gap:13px}ul.perks li{display:flex;gap:12px;align-items:flex-start}ul.perks svg{flex:none;margin-top:2px}
 .free{margin:26px auto 0;max-width:760px;border:1px solid #d1d5db;border-radius:16px;padding:16px 20px;display:flex;gap:14px;align-items:flex-start;color:#e5e7eb}.free svg{flex:none;margin-top:3px}.fine{color:#8f939a;font-size:13px;text-align:center;margin-top:18px}
 .card{max-width:460px;margin:8vh auto;border:1px solid #d1d5db;border-radius:20px;padding:28px}.card input{width:100%;padding:12px;border-radius:10px;border:1px solid #3d3d41;background:#111;color:#fff;font-size:16px;margin:8px 0 14px}.card .sub{margin-top:6px}.err{color:#ff8a8a}`;
-  const shell = (title, body, who) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><link rel="icon" type="image/webp" href="/assets/icon.webp"><style>${CSS}</style></head><body><div class="top"><a href="/">AutoAuth</a><div class="r">${who ? `<a href="/dashboard/${esc(who)}">Dashboard</a>` : '<a href="/login">Log in</a><a href="/signup">Sign up</a>'}</div></div>${body}</body></html>`;
+  const shell = (title, body, who) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><link rel="icon" type="image/webp" href="/assets/icon.webp"><style>${CSS}${siteMod.FOOTER_CSS}</style></head><body><div class="top"><a href="/">AutoAuth</a><div class="r">${who ? `<a href="/dashboard/${esc(who)}">Dashboard</a>` : '<a href="/login">Log in</a><a href="/signup">Sign up</a>'}</div></div>${body}${siteMod.footerHtml()}</body></html>`;
 
   async function pricingPage(req, res) {
     const cc = countryOf(req, res), code = CUR[cc] || "CAD", r = await ratesNow(), rate = r[code] || 1, shownCode = r[code] ? code : "CAD";

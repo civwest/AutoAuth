@@ -268,3 +268,6 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 - **Account dashboard** now has the black "About AutoAuth" footer bar from the public site.
 - **Connect Google Drive button** has a Google-style look. It shows Google's official logo if you save the official PNG as `public/google-drive.png` (or an SVG as `public/google-drive.svg`), otherwise a neutral cloud icon.
 - Storage tokens are also kept (encrypted) for `role_connections.write` and `applications.commands.permissions.update`.
+
+## v1.6.9
+- The black "About AutoAuth" footer bar is now on the plans page (and the other billing pages).
