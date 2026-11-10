@@ -276,3 +276,11 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 - **New dashboard theme** for both dashboards, matching the plans page (black, light-gray rounded cards, white buttons).
 - **Collapsible sidebar on desktop**, remembered per browser. The plans page now shows the sidebar for signed-in accounts (Plans is in the sidebar).
 - **Friendlier project pages:** setup checklist with progress and Copy buttons, status chips and a hint on every project tab, empty states, help text under each editor field, page content now starts at the top instead of being vertically centred.
+
+## v1.7.1
+- **Dashboard on its own subdomain:** set `DASHBOARD_HOST` (for example `dashboard.autoauth.cfd`). Dashboard, login and sign-up pages move there; public pages and all sign-in callbacks stay on the main domain. Sessions are shared across both hosts.
+
+## v1.7.2
+- **Linked roles with conditions, on both dashboard sides.** On a project's Linked roles tab, build up to 5 conditions (email verified, Discord account age, days since authorizing, number of servers, is in a server, has a linked account, or a manual yes/no or number). They are published to Discord as role fields and filled in automatically the moment someone authorizes. "Update everyone now" recalculates up to 100 members at a time.
+- **Manual assignment:** set or clear a value for any member by hand. A hand-set value wins over the automatic condition until cleared. The raw JSON tools are still there under Advanced.
+- Hand-set values move with the data when you change a project's storage and are removed with the member.

@@ -58,6 +58,7 @@ function createSecurity({ log }) {
   function allowedHosts() {
     const hosts = new Set(["localhost", "127.0.0.1"]);
     for (const v of [process.env.REDIRECT_URI, process.env.LOGIN_REDIRECT_URI]) { try { const h = new URL(v).hostname.toLowerCase(); hosts.add(h); hosts.add("www." + h.replace(/^www\./, "")); } catch {} }
+    if (process.env.DASHBOARD_HOST) hosts.add(String(process.env.DASHBOARD_HOST).replace(/^https?:\/\//, "").replace(/[/:].*$/, "").toLowerCase());
     for (const h of String(process.env.ALLOWED_HOSTS || "").split(/[ ,]+/).filter(Boolean)) hosts.add(h.toLowerCase());
     return hosts;
   }

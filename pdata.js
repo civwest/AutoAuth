@@ -19,6 +19,7 @@ const HOOK_URL = /^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/api\/(?:
 // Webhook URLs must be Discord's own, so the server can never be made to call somewhere else.
 const DISCORD_HOOK = /^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/\d{17,20}\/[\w-]+$/;
 const DATA_SCOPES = new Set([...Object.values(DATA).map((d) => d.scope), ...TOKEN_SCOPES]);
+const ID = /^\d{17,20}$/;
 const LIMITS = () => ({ guilds: Number(process.env.FLAG_GUILDS_24H) || 30, members: Number(process.env.FLAG_MEMBERS_1H) || 100 });
 
 module.exports = function createPdata({ pool, enc, dec, log, express, esc, origin, site, drive }) {
@@ -54,6 +55,73 @@ module.exports = function createPdata({ pool, enc, dec, log, express, esc, origi
     return (await r.json()).map((g) => ({ id: g.id, name: g.name, members: g.approximate_member_count || 0, icon: g.icon ? `https://cdn.discordapp.com/icons/${g.id}/${g.icon}.png?size=64` : "" }));
   };
 
+
+  // ---------- linked roles: conditions that fill in a member's role-connection values automatically, plus manual overrides ----------
+  const LSRC = {
+    age_days: { label: "Discord account age (days)", num: true },
+    auth_days: { label: "Days since they authorized this project", num: true },
+    guild_count: { label: "Number of servers they are in", num: true, needs: "guilds" },
+    email_verified: { label: "Email is verified", needs: "email" },
+    in_server: { label: "Is in a server (server ID)", param: "Server ID", needs: "guilds" },
+    connection: { label: "Has a linked account (github, steam...)", param: "Service name", needs: "connections" },
+    manual_bool: { label: "Manual yes or no", manual: true },
+    manual_number: { label: "Manual number", num: true, manual: true },
+  };
+  const LOPS = { gte: [2, "at least"], lte: [1, "at most"], eq: [3, "exactly"] };
+  const rulesOf = (p) => { const l = (p.config || {}).linked; return l && Array.isArray(l.rules) ? l.rules : []; };
+  const platformOf = (p) => clip(((p.config || {}).linked || {}).platform, 50) || clip(p.name, 50) || "AutoAuth";
+  function cleanRules(list) {
+    if (!Array.isArray(list)) throw Object.assign(new Error("Expected a list of conditions."), { status: 400 });
+    if (list.length > 5) throw Object.assign(new Error("Discord allows up to 5 fields."), { status: 400 });
+    const seen = new Set();
+    return list.map((r, i) => {
+      const src = LSRC[String(r && r.source)]; if (!src) throw Object.assign(new Error(`Condition ${i + 1}: choose what to check.`), { status: 400 });
+      const key = String(r.key || "").toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 50), name = clip(r.name, 100), description = clip(r.description, 200);
+      if (!/^[a-z0-9_]{1,50}$/.test(key) || seen.has(key)) throw Object.assign(new Error(`Condition ${i + 1}: use a unique key of letters, numbers and _.`), { status: 400 });
+      if (!name || !description) throw Object.assign(new Error(`Condition ${i + 1}: add a name and a description.`), { status: 400 });
+      seen.add(key);
+      const out = { key, name, description, source: String(r.source), param: "", op: "", value: 0 };
+      if (src.param) { out.param = clip(r.param, 100); if (!out.param || (r.source === "in_server" && !ID.test(out.param))) throw Object.assign(new Error(`Condition ${i + 1}: ${src.param} is needed${r.source === "in_server" ? " and must be a number" : ""}.`), { status: 400 }); if (r.source === "connection") out.param = out.param.toLowerCase(); }
+      if (src.num && !src.manual && r.op && LOPS[r.op]) { out.op = r.op; out.value = Math.max(0, Math.min(1e9, Math.floor(Number(r.value) || 0))); }
+      return out;
+    });
+  }
+  const typeOf = (r) => (LSRC[r.source].num && !r.op ? 2 : 7);
+  const metaOf = (rules) => rules.map((r) => ({ key: r.key, name: r.name, description: r.description, type: r.op && LOPS[r.op] ? 7 : typeOf(r) }));
+  const snowMs = (id) => { try { return Number(BigInt(id) >> 22n) + 1420070400000; } catch { return Date.now(); } };
+  const getKind = async (p, uid, kind) => {
+    try {
+      if (isDrive(p)) { const t = await drive.get(dsub(p), p.slug, `${kind}-${uid}.json`); return t ? (JSON.parse(t).data ?? null) : null; }
+      const r = (await pool.query("SELECT data_enc FROM project_data WHERE slug=$1 AND user_id=$2 AND kind=$3", [p.slug, String(uid), kind])).rows[0];
+      return r ? JSON.parse(dec(r.data_enc)) : null;
+    } catch { return null; }
+  };
+  const putKind = (p, uid, uname, kind, data) => isDrive(p)
+    ? drive.put(dsub(p), p.slug, `${kind}-${uid}.json`, JSON.stringify({ user_id: uid, username: uname, updated: new Date().toISOString(), data }, null, 2))
+    : pool.query("INSERT INTO project_data(slug,user_id,kind,data_enc) VALUES($1,$2,$3,$4) ON CONFLICT(slug,user_id,kind) DO UPDATE SET data_enc=$4,updated_at=NOW()", [p.slug, String(uid), kind, enc(JSON.stringify(data))]);
+  async function linkedValues(p, uid, since) {
+    const rules = rulesOf(p), man = (await getKind(p, uid, "roleman")) || {}, cache = {}, kind = async (k) => (k in cache ? cache[k] : (cache[k] = await getKind(p, uid, k))), out = {};
+    for (const r of rules) {
+      if (r.key in man) { out[r.key] = typeof man[r.key] === "boolean" ? (man[r.key] ? 1 : 0) : Number(man[r.key]) || 0; continue; }
+      let v = 0;
+      if (r.source === "age_days") v = Math.max(0, Math.floor((Date.now() - snowMs(uid)) / 86400000));
+      else if (r.source === "auth_days") v = Math.max(0, Math.floor((Date.now() - (since ? new Date(since).getTime() : Date.now())) / 86400000));
+      else if (r.source === "guild_count") { const d = await kind("guilds"); v = Array.isArray(d) ? d.length : 0; }
+      else if (r.source === "email_verified") { const d = await kind("email"); v = d && d.verified ? 1 : 0; }
+      else if (r.source === "in_server") { const d = await kind("guilds"); v = Array.isArray(d) && d.some((g) => String(g.id) === r.param) ? 1 : 0; }
+      else if (r.source === "connection") { const d = await kind("connections"); v = Array.isArray(d) && d.some((x) => String(x.type).toLowerCase() === r.param) ? 1 : 0; }
+      if (r.op && LOPS[r.op]) v = r.op === "gte" ? (v >= r.value ? 1 : 0) : r.op === "lte" ? (v <= r.value ? 1 : 0) : (v === r.value ? 1 : 0);
+      out[r.key] = v;
+    }
+    return out;
+  }
+  async function pushRoles(p, uid, uname, bearer, since) {
+    const c = p.config || {}; if (!rulesOf(p).length) return false;
+    const r = await fetch(`https://discord.com/api/v10/users/@me/applications/${c.client_id}/role-connection`, { method: "PUT", headers: { Authorization: "Bearer " + bearer, "Content-Type": "application/json" }, body: JSON.stringify({ platform_name: platformOf(p), platform_username: clip(uname, 100) || undefined, metadata: await linkedValues(p, uid, since) }) });
+    if (!r.ok) throw new Error("Discord error " + r.status);
+    return true;
+  }
+
   // Called by the OAuth callback: keeps the data each selected permission returned.
   async function collect(p, u, t) {
     const sc = String(t.scope || "").split(/[ ,]+/), drv = isDrive(p), uname = u.global_name || u.username || u.id;
@@ -74,6 +142,7 @@ module.exports = function createPdata({ pool, enc, dec, log, express, esc, origi
       if (t.webhook && HOOK_URL.test(String(t.webhook.url || ""))) await put("webhook", { id: t.webhook.id, channel_id: t.webhook.channel_id, guild_id: t.webhook.guild_id, url: t.webhook.url });
       // Google Drive projects keep the add-to-server tokens (encrypted) in the same Drive folder, never in our database.
       if (drv && sc.some((x) => TOKEN_SCOPES.has(x))) await drive.put(dsub(p), p.slug, `token-${u.id}.json`, JSON.stringify({ enc: enc(JSON.stringify({ a: t.access_token, r: t.refresh_token || "", e: Date.now() + Number(t.expires_in || 604800) * 1000 })) }));
+      if (sc.includes("role_connections.write") && rulesOf(p).length && (p.config || {}).client_id) await pushRoles(p, u.id, uname, t.access_token, new Date()).catch((e) => console.error("linked roles", e.message)); // conditions apply the moment someone authorizes
     } catch (e) {
       console.error("project data", e.message);
       if (drv) await pool.query("INSERT INTO project_logs(slug,event_type,detail) VALUES($1,'drive_error',$2)", [p.slug, JSON.stringify({ error: String(e.message).slice(0, 200) })]).catch(() => {});
@@ -177,7 +246,7 @@ if(r.ok){location.reload();}else{o.textContent=j.error||'Something went wrong.';
       await pool.query("UPDATE side_project_users SET access_token_enc=$2,refresh_token_enc=$2 WHERE slug=$1", [p.slug, enc("")]); // Drive projects keep no tokens in the database
     } else {
       const gone = [];
-      for (const kind of Object.keys(DATA)) for (const f of await drive.list(sub, p.slug, kind + "-", 2000)) {
+      for (const kind of [...Object.keys(DATA), "roleman"]) for (const f of await drive.list(sub, p.slug, kind + "-", 2000)) {
         let j = null; try { j = JSON.parse(f.text); } catch {}
         if (!j || !j.user_id) continue;
         await pool.query("INSERT INTO project_data(slug,user_id,kind,data_enc) VALUES($1,$2,$3,$4) ON CONFLICT(slug,user_id,kind) DO UPDATE SET data_enc=$4,updated_at=NOW()", [p.slug, String(j.user_id), kind, enc(JSON.stringify(j.data))]);
@@ -218,7 +287,7 @@ if(r.ok){location.reload();}else{o.textContent=j.error||'Something went wrong.';
 
     // ---------- permission tools: Add bot, Commands, Command permissions, Linked roles ----------
     const PAGES = { bot: ["bot"], commands: ["applications.commands", "applications.commands.update"], permissions: ["applications.commands.permissions.update"], roles: ["role_connections.write"] };
-    const ID = /^\d{17,20}$/, hasAny = (p, list) => list.some((x) => scopesOf(p).includes(x));
+    const hasAny = (p, list) => list.some((x) => scopesOf(p).includes(x));
     const appAuth = async (c) => {
       if (c.bot_token_enc) return "Bot " + dec(c.bot_token_enc);
       const r = await fetch("https://discord.com/api/v10/oauth2/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Authorization: "Basic " + Buffer.from(c.client_id + ":" + dec(c.client_secret_enc)).toString("base64") }, body: new URLSearchParams({ grant_type: "client_credentials", scope: "applications.commands.update" }) });
@@ -235,7 +304,7 @@ if(r.ok){location.reload();}else{o.textContent=j.error||'Something went wrong.';
     const jsonOf = (v, kind) => { let j; try { j = JSON.parse(String(v || "")); } catch { throw Object.assign(new Error("That is not valid JSON."), { status: 400 }); } if (kind === "array" ? !Array.isArray(j) : (!j || typeof j !== "object" || Array.isArray(j))) throw Object.assign(new Error(kind === "array" ? "Expected a JSON list, like [ ... ]." : "Expected a JSON object, like { ... }."), { status: 400 }); if (JSON.stringify(j).length > 12000) throw Object.assign(new Error("That is too large."), { status: 400 }); return j; };
     const needBot = '<div class="card"><b>Add your bot token in this project\'s settings first.</b> This tool calls Discord as your bot.</div>';
     const userPick = (rows, id) => `<select id="${id}">${rows.map((u) => `<option value="${esc(u.user_id)}">${esc(u.username || u.user_id)}</option>`).join("") || '<option value="">No one authorized with this permission yet</option>'}</select>`;
-    const act = (base) => `<script>async function pa(b,body,ok){b.disabled=true;var o=document.getElementById('pa-out');o.textContent='Working...';try{var r=await fetch('${base}/perm-action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),j=await r.json().catch(function(){return{};});if(r.ok){o.textContent=ok||'Done.';if(j.reload)setTimeout(function(){location.reload();},700);}else{o.textContent=j.error||'Something went wrong.';}}catch(e){o.textContent=e.message;}b.disabled=false;}</script><div id="pa-out" class="muted" style="margin-top:12px;white-space:pre-wrap"></div>`;
+    const act = (base) => `<script>async function pa(b,body,ok){b.disabled=true;var o=document.getElementById('pa-out');o.textContent='Working...';try{var r=await fetch('${base}/perm-action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),j=await r.json().catch(function(){return{};});if(r.ok){o.textContent=j.message||ok||'Done.';if(j.reload)setTimeout(function(){location.reload();},700);}else{o.textContent=j.error||'Something went wrong.';}}catch(e){o.textContent=e.message;}b.disabled=false;}</script><div id="pa-out" class="muted" style="margin-top:12px;white-space:pre-wrap"></div>`;
     const tokenUsers = async (p, scope) => (await pool.query("SELECT user_id,username,scope FROM side_project_users WHERE slug=$1 ORDER BY created_at DESC LIMIT 500", [p.slug])).rows.filter((u) => String(u.scope).split(/[ ,]+/).includes(scope));
 
     app.get("/dashboard/:u/:name/perm/:page", acctOnly, async (req, res) => {
@@ -260,8 +329,42 @@ if(r.ok){location.reload();}else{o.textContent=j.error||'Something went wrong.';
         } else {
           let meta = "[]", metaErr = "";
           if (c.bot_token_enc) { try { meta = JSON.stringify(await dj(`/applications/${c.client_id}/role-connections/metadata`, "GET", "Bot " + dec(c.bot_token_enc)), null, 2); } catch (e) { metaErr = e.message; } }
-          body = (c.bot_token_enc ? "" : needBot) + `<div class="card"><h2>Linked roles: fields</h2><p class="muted" style="margin-top:0">The fields servers can check (up to 5). Each has a type (1 to 8), a key, a name and a description.</p>${metaErr ? `<p style="color:#ff938a">${esc(metaErr)}</p>` : ""}<textarea id="rl-meta" spellcheck="false">${esc(meta)}</textarea><button type="button" class="green" onclick="pa(this,{action:'role-meta',json:$('rl-meta').value},'Saved.')"${c.bot_token_enc ? "" : " disabled"}>Save fields</button></div>
-<div class="card"><h2>Set a member's values</h2><label>Authorized member</label>${userPick(await tokenUsers(p, "role_connections.write"), "rl-user")}<label>Platform name</label><input id="rl-pn" maxlength="50" placeholder="My Game"><label>Platform username</label><input id="rl-pu" maxlength="100"><label>Values</label><textarea id="rl-vals" spellcheck="false">{ "level": 5 }</textarea><button type="button" class="green" onclick="pa(this,{action:'role-set',user:$('rl-user').value,platform_name:$('rl-pn').value,platform_username:$('rl-pu').value,json:$('rl-vals').value},'Saved.')">Save for member</button></div>${act(base)}`;
+          const sc = scopesOf(p), store = !!c.store, rules = rulesOf(p), users = await tokenUsers(p, "role_connections.write");
+          const avail = (k, s) => !s.needs || (store && sc.includes(s.needs));
+          const srcOpts = (cur) => Object.entries(LSRC).map(([k, s]) => `<option value="${k}"${k === cur ? " selected" : ""}${avail(k, s) ? "" : " disabled"}>${esc(s.label)}${avail(k, s) ? "" : " (needs the " + s.needs + " permission and stored data)"}</option>`).join("");
+          const meta5 = { sources: LSRC, ops: LOPS };
+          const row = (r) => `<div class="rl-rule card" style="margin:10px 0"><div class="rl-grid"><div><label>Name people see</label><input class="r-name" maxlength="100" value="${esc(r.name || "")}" placeholder="Verified member"></div><div><label>Key (letters, numbers, _)</label><input class="r-key" maxlength="50" value="${esc(r.key || "")}" placeholder="verified"></div></div>
+<label>Description</label><input class="r-desc" maxlength="200" value="${esc(r.description || "")}" placeholder="Has a verified email">
+<div class="rl-grid"><div><label>What to check</label><select class="r-src">${srcOpts(r.source || "email_verified")}</select></div><div class="r-parwrap"><label class="r-parlab">Value</label><input class="r-par" maxlength="100" value="${esc(r.param || "")}"></div></div>
+<div class="rl-grid r-cond"><div><label>Condition</label><select class="r-op"><option value="">Pass the number on (servers set the limit)</option>${Object.entries(LOPS).map(([k, o]) => `<option value="${k}"${r.op === k ? " selected" : ""}>Yes when it is ${o[1]}</option>`).join("")}</select></div><div><label>Amount</label><input class="r-val" type="number" min="0" value="${esc(r.op ? r.value : 0)}"></div></div>
+<button type="button" class="secondary r-del" style="margin-top:8px">Remove</button></div>`;
+          const hasManual = rules.length ? "" : "";
+          body = (c.bot_token_enc ? "" : needBot) + `<style>.rl-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:700px){.rl-grid{grid-template-columns:1fr}}</style>
+<div class="card"><h2>Conditions that apply roles automatically</h2><p class="muted" style="margin-top:0">Each condition becomes a field on the linked role. When someone authorizes this project, their values are filled in right away. Then in your server open Server Settings, Roles, pick a role, Links, and require the field. Discord gives the role to anyone who meets it.</p>
+<label>Platform name shown on the member's profile</label><input id="rl-plat" maxlength="50" value="${esc(platformOf(p))}">
+<div id="rl-rules">${rules.map(row).join("")}</div><button type="button" class="secondary" id="rl-add">Add a condition</button> <button type="button" class="green" id="rl-save">Save and publish</button>
+<p class="muted" id="rl-hint" style="margin-bottom:0">Up to 5 conditions. ${c.bot_token_enc ? "" : "Add your bot token in the project settings so the fields can be published to Discord."}</p></div>
+<div class="card"><h2>Update everyone now</h2><p class="muted" style="margin-top:0">Recalculates every authorized member (${users.length}) and sends the values to Discord. Use it after you change a condition. Up to 100 people per click.</p><button type="button" class="green" onclick="pa(this,{action:'linked-sync'},null)"${users.length && rules.length ? "" : " disabled"}>Update ${users.length} member${users.length === 1 ? "" : "s"}</button></div>
+<div class="card"><h2>Assign by hand</h2><p class="muted" style="margin-top:0">Give or take away a value for one member. A hand-set value wins over the automatic condition until you clear it.</p>
+<label>Authorized member</label>${userPick(users, "lm-user")}<label>Field</label><select id="lm-key">${rules.map((r) => `<option value="${esc(r.key)}" data-t="${typeOf(r) === 7 || r.op ? "b" : "n"}">${esc(r.name)}</option>`).join("") || '<option value="">Save a condition first</option>'}</select>
+<label>Value</label><select id="lm-bool"><option value="1">Yes (has the role requirement)</option><option value="0">No</option></select><input id="lm-num" type="number" min="0" value="0" style="display:none">
+<button type="button" class="green" id="lm-set">Set value</button> <button type="button" class="secondary" id="lm-clear">Go back to automatic</button></div>
+<details class="card"><summary style="cursor:pointer"><b>Advanced: raw fields and values</b></summary>${metaErr ? `<p style="color:#ff938a">${esc(metaErr)}</p>` : ""}<p class="muted">Fields currently published to Discord. Saving your conditions above replaces these.</p><textarea id="rl-meta" spellcheck="false">${esc(meta)}</textarea><button type="button" class="green" onclick="pa(this,{action:'role-meta',json:$('rl-meta').value},'Saved.')"${c.bot_token_enc ? "" : " disabled"}>Save fields</button>
+<h3>Set a member's values by JSON</h3><label>Authorized member</label>${userPick(users, "rl-user")}<label>Platform name</label><input id="rl-pn" maxlength="50" placeholder="My Game"><label>Platform username</label><input id="rl-pu" maxlength="100"><label>Values</label><textarea id="rl-vals" spellcheck="false">{ "level": 5 }</textarea><button type="button" class="green" onclick="pa(this,{action:'role-set',user:$('rl-user').value,platform_name:$('rl-pn').value,platform_username:$('rl-pu').value,json:$('rl-vals').value},'Saved.')">Save for member</button></details>${act(base)}
+<script>(function(){var META=${JSON.stringify(meta5).replace(/</g, "\\u003c")},TPL=${JSON.stringify(row({})).replace(/</g, "\\u003c")};
+function cfg(el){var s=el.querySelector('.r-src').value,m=META.sources[s]||{};el.querySelector('.r-parwrap').style.display=m.param?'':'none';if(m.param)el.querySelector('.r-parlab').textContent=m.param;
+ var c=el.querySelector('.r-cond');c.style.display=(m.num&&!m.manual)?'':'none';var o=el.querySelector('.r-op');el.querySelector('.r-val').parentNode.style.display=o.value?'':'none';}
+function wire(el){el.querySelector('.r-src').addEventListener('change',function(){cfg(el);});el.querySelector('.r-op').addEventListener('change',function(){cfg(el);});el.querySelector('.r-del').addEventListener('click',function(){el.remove();});cfg(el);}
+function rows(){return [].slice.call(document.querySelectorAll('.rl-rule'));}
+rows().forEach(wire);
+$('rl-add').addEventListener('click',function(){if(rows().length>=5)return showMsg('Linked roles','Discord allows up to 5 fields.');var d=document.createElement('div');d.innerHTML=TPL;var e=d.firstChild;$('rl-rules').appendChild(e);wire(e);});
+$('rl-save').addEventListener('click',function(){var list=rows().map(function(e){return{name:e.querySelector('.r-name').value,key:e.querySelector('.r-key').value,description:e.querySelector('.r-desc').value,source:e.querySelector('.r-src').value,param:e.querySelector('.r-par').value,op:e.querySelector('.r-op').value,value:e.querySelector('.r-val').value};});pa(this,{action:'linked-save',platform:$('rl-plat').value,rules:list},'Saved and published.');});
+function lt(){var o=$('lm-key').selectedOptions[0];var b=!o||o.dataset.t==='b';$('lm-bool').style.display=b?'':'none';$('lm-num').style.display=b?'none':'';}
+$('lm-key').addEventListener('change',lt);lt();
+function man(clear){var o=$('lm-key').selectedOptions[0];if(!o||!$('lm-key').value)return showMsg('Linked roles','Save a condition first.');var b=o.dataset.t==='b';return {action:'linked-manual',user:$('lm-user').value,key:$('lm-key').value,clear:clear,value:b?$('lm-bool').value:$('lm-num').value};}
+$('lm-set').addEventListener('click',function(){var m=man(false);if(m)pa(this,m,'Saved and sent to Discord.');});
+$('lm-clear').addEventListener('click',function(){var m=man(true);if(m)pa(this,m,'Back to automatic.');});
+})();</script>`;
         }
       } catch (e) { body = `<div class="card"><b>Could not load this page.</b><p class="muted" style="margin-bottom:0">${esc(e.message)}</p></div>`; }
       page(req, res, "projects", head + body);
@@ -271,10 +374,10 @@ if(r.ok){location.reload();}else{o.textContent=j.error||'Something went wrong.';
       const a = req.acct, p = await own(a, req.params.name); if (!p) return res.status(404).json({ error: "Project not found." });
       if (p.locked) return res.status(403).json({ error: "This project is locked." });
       if (limited("pa:" + a.id, 30)) return res.status(429).json({ error: "Slow down." });
-      const b = req.body || {}, c = p.config || {}, need = { leave: PAGES.bot, "cmd-create": PAGES.commands, "cmd-delete": PAGES.commands, "perm-set": PAGES.permissions, "role-meta": PAGES.roles, "role-set": PAGES.roles }[b.action];
+      const b = req.body || {}, c = p.config || {}, need = { leave: PAGES.bot, "cmd-create": PAGES.commands, "cmd-delete": PAGES.commands, "perm-set": PAGES.permissions, "role-meta": PAGES.roles, "role-set": PAGES.roles, "linked-save": PAGES.roles, "linked-sync": PAGES.roles, "linked-manual": PAGES.roles }[b.action];
       if (!need || !hasAny(p, need)) return res.status(400).json({ error: "That action is not available for this project." });
       try {
-        if (b.action !== "cmd-create" && b.action !== "cmd-delete" && b.action !== "perm-set" && b.action !== "role-set" && !c.bot_token_enc) return res.status(400).json({ error: "Add your bot token in this project's settings first." });
+        if (b.action !== "cmd-create" && b.action !== "cmd-delete" && b.action !== "perm-set" && b.action !== "role-set" && b.action !== "linked-save" && b.action !== "linked-sync" && b.action !== "linked-manual" && !c.bot_token_enc) return res.status(400).json({ error: "Add your bot token in this project's settings first." });
         const botAuth = () => "Bot " + dec(c.bot_token_enc);
         const userAuth = async (uid, scope) => {
           const row = (await pool.query("SELECT user_id,access_token_enc,refresh_token_enc,expires_at,scope FROM side_project_users WHERE slug=$1 AND user_id=$2", [p.slug, String(uid)])).rows[0];
@@ -289,6 +392,31 @@ if(r.ok){location.reload();}else{o.textContent=j.error||'Something went wrong.';
         else if (b.action === "perm-set") { if (!ID.test(String(b.guild)) || !ID.test(String(b.command))) throw Object.assign(new Error("Enter a valid server ID and command ID."), { status: 400 }); await dj(`/applications/${c.client_id}/guilds/${b.guild}/commands/${b.command}/permissions`, "PUT", await userAuth(b.user, "applications.commands.permissions.update"), { permissions: jsonOf(b.json, "array") }); }
         else if (b.action === "role-meta") { await dj(`/applications/${c.client_id}/role-connections/metadata`, "PUT", botAuth(), jsonOf(b.json, "array")); }
         else if (b.action === "role-set") { await dj(`/users/@me/applications/${c.client_id}/role-connection`, "PUT", await userAuth(b.user, "role_connections.write"), { platform_name: clip(b.platform_name, 50), platform_username: clip(b.platform_username, 100), metadata: jsonOf(b.json, "object") }); }
+        else if (b.action === "linked-save") {
+          const rules = cleanRules(b.rules), linked = { platform: clip(b.platform, 50) || platformOf(p), rules };
+          await pool.query("UPDATE side_projects SET config=config || $2::jsonb WHERE slug=$1", [p.slug, JSON.stringify({ linked })]);
+          if (!c.bot_token_enc) throw Object.assign(new Error("Saved, but add your bot token in the project settings to publish the fields to Discord."), { status: 400 });
+          await dj(`/applications/${c.client_id}/role-connections/metadata`, "PUT", botAuth(), metaOf(rules));
+          reload = true;
+        }
+        else if (b.action === "linked-sync") {
+          if (!rulesOf(p).length) throw Object.assign(new Error("Save a condition first."), { status: 400 });
+          const rows = (await pool.query("SELECT user_id,username,access_token_enc,refresh_token_enc,expires_at,scope,created_at FROM side_project_users WHERE slug=$1 ORDER BY created_at DESC LIMIT 100", [p.slug])).rows.filter((u) => String(u.scope).split(/[ ,]+/).includes("role_connections.write"));
+          let ok = 0, bad = 0;
+          for (const row of rows) { try { const t = await freshToken(p, row); if (t && await pushRoles(p, row.user_id, row.username, t, row.created_at)) ok++; else bad++; } catch { bad++; } await sleep(400); }
+          await pool.query("INSERT INTO project_logs(slug,event_type,detail) VALUES($1,'tool_used',$2)", [p.slug, JSON.stringify({ action: "linked-sync", ok, bad })]);
+          return res.json({ ok: true, message: `Updated ${ok} member${ok === 1 ? "" : "s"}${bad ? `, ${bad} could not be updated (they may need to authorize again)` : ""}.` });
+        }
+        else if (b.action === "linked-manual") {
+          const rule = rulesOf(p).find((r) => r.key === String(b.key)); if (!rule) throw Object.assign(new Error("Choose a field."), { status: 400 });
+          const row = (await pool.query("SELECT user_id,username,access_token_enc,refresh_token_enc,expires_at,scope,created_at FROM side_project_users WHERE slug=$1 AND user_id=$2", [p.slug, String(b.user)])).rows[0];
+          if (!row || !String(row.scope).split(/[ ,]+/).includes("role_connections.write")) throw Object.assign(new Error("Choose someone who authorized with Linked roles."), { status: 400 });
+          const man = (await getKind(p, row.user_id, "roleman")) || {}, isBool = typeOf(rule) === 7;
+          if (b.clear) delete man[rule.key]; else man[rule.key] = isBool ? String(b.value) === "1" : Math.max(0, Math.min(1e9, Math.floor(Number(b.value) || 0)));
+          await putKind(p, row.user_id, row.username || row.user_id, "roleman", man);
+          const t = await freshToken(p, row); if (!t) throw Object.assign(new Error("Saved, but their sign-in expired so Discord was not updated. They need to authorize again."), { status: 400 });
+          await pushRoles(p, row.user_id, row.username, t, row.created_at);
+        }
         await pool.query("INSERT INTO project_logs(slug,event_type,detail) VALUES($1,'tool_used',$2)", [p.slug, JSON.stringify({ action: b.action })]);
         res.json({ ok: true, reload });
       } catch (e) { res.status(e.status && e.status < 500 ? (e.status === 401 || e.status === 403 ? 400 : e.status) : 502).json({ error: e.message }); }
@@ -322,7 +450,7 @@ if(r.ok){location.reload();}else{o.textContent=j.error||'Something went wrong.';
       const a = req.acct, p = await own(a, req.params.name); if (!p) return res.status(404).send("Not found");
       const uid = String(req.params.uid);
       await pool.query("DELETE FROM project_data WHERE slug=$1 AND user_id=$2", [p.slug, uid]);
-      if (isDrive(p)) await drive.del(dsub(p), p.slug, [...Object.keys(DATA), "token"].map((k) => `${k}-${uid}.json`)).catch(() => {});
+      if (isDrive(p)) await drive.del(dsub(p), p.slug, [...Object.keys(DATA), "roleman", "token"].map((k) => `${k}-${uid}.json`)).catch(() => {});
       await pool.query("DELETE FROM side_project_users WHERE slug=$1 AND user_id=$2", [p.slug, uid]);
       await pool.query("INSERT INTO project_logs(slug,event_type,detail) VALUES($1,'user_removed','{}')", [p.slug]);
       res.redirect(303, base(a, p) + "/users");

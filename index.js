@@ -20,10 +20,11 @@ const PgSession = require("connect-pg-simple")(session);
 app.set("trust proxy", 1);
 const {createSecurity,totpVerify}=require("./security");
 const security=createSecurity({log}); security.mount(app); // rate limiter, headers, host check, cross-site POST block
+const hosts=require("./hosts")(); app.use(hosts.middleware); // dashboard on its own subdomain when DASHBOARD_HOST is set
 app.use(express.urlencoded({ extended: false, limit: "20kb" }));
 app.use(session({ name:"autoauth.sid", secret:process.env.SESSION_SECRET, resave:false, saveUninitialized:false, rolling:false,
   store:new PgSession({ pool, tableName:"dashboard_sessions", createTableIfMissing:true, ttl:2*60*60 }),
-  cookie:{ httpOnly:true, secure:"auto", sameSite:"lax", maxAge:2*60*60*1000 } }));
+  cookie:{ httpOnly:true, secure:"auto", sameSite:"lax", maxAge:2*60*60*1000, ...(hosts.cookieDomain?{domain:hosts.cookieDomain}:{}) } }));
 // The Discord client is re-created on every (re)connect, because a destroyed discord.js client cannot reliably log in again.
 // `client` is a stable proxy that always points at the current instance, so other modules never hold a dead client.
 let realClient = null, dash = null;

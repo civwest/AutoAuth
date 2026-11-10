@@ -307,3 +307,15 @@ The main dashboard profile also has a Google Drive card, so your own projects ca
 Both dashboards (the owner dashboard and the sign-up account dashboard) use the same look as the plans page: black background, light-gray rounded cards, white buttons. On desktop the sidebar has a collapse button (top of the sidebar) and a round button to bring it back; the choice is remembered in the browser. Signed-in accounts see the plans page inside their dashboard, sidebar included; visitors who are not signed in see the plain plans page.
 
 Project pages have a status line (type, storage, locked), a one-line hint per tab, a setup checklist with progress and Copy buttons, a friendly empty state on the Projects page, and a short help line under each field in the project editor.
+
+### Dashboard on its own host (dashboard.autoauth.cfd)
+
+1. In Render, open the service > Settings > Custom Domains > Add `dashboard.autoauth.cfd`.
+2. At your DNS host add a CNAME: host `dashboard`, value your service's `onrender.com` address (Render shows it). Wait for Render to verify and issue the certificate.
+3. Set `DASHBOARD_HOST=dashboard.autoauth.cfd` and redeploy.
+
+After that, `/dashboard`, `/login`, `/signup`, `/account` and `/users` on the main site redirect to the dashboard host, and the dashboard host sends every public page back to the main site. Discord, Google, X and Drive redirect URIs stay on the main domain, so nothing changes in those developer consoles. A cookie shared across `.autoauth.cfd` keeps you signed in on both hosts; everyone signs in once more after the switch.
+
+### Linked roles
+
+Projects with the Linked roles permission get a builder on their Linked roles tab. Conditions become role fields; in your Discord server open Server Settings > Roles > a role > Links and require the field. A bot token in the project settings is needed to publish the fields. Values update when someone authorizes, when you press Update everyone now, or when you set one by hand.
