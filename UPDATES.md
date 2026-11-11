@@ -284,3 +284,6 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 - **Linked roles with conditions, on both dashboard sides.** On a project's Linked roles tab, build up to 5 conditions (email verified, Discord account age, days since authorizing, number of servers, is in a server, has a linked account, or a manual yes/no or number). They are published to Discord as role fields and filled in automatically the moment someone authorizes. "Update everyone now" recalculates up to 100 members at a time.
 - **Manual assignment:** set or clear a value for any member by hand. A hand-set value wins over the automatic condition until cleared. The raw JSON tools are still there under Advanced.
 - Hand-set values move with the data when you change a project's storage and are removed with the member.
+
+## v1.7.3
+- **Clean dashboard addresses.** On the dashboard host the `/dashboard` part is gone: `dashboard.autoauth.cfd/` is the home page and `dashboard.autoauth.cfd/alice/shop/setup` is a project page. Old `/dashboard/...` links redirect to the short form. Pages that share a name with a public page (`/dashboard/users`, `/dashboard/projects/...`) keep their full path.
