@@ -26,9 +26,9 @@ function createHosts(env = process.env) {
       const q = String(req.url || "").includes("?") ? "?" + String(req.url).split("?").slice(1).join("?") : "";
       if (!unsafe && raw === "/dashboard") return res.redirect(302, "/" + q);
       if (!unsafe && raw.startsWith("/dashboard/") && !KEEP.has(seg(raw.slice(10)))) return res.redirect(302, raw.slice(10) + q);
-      if (path === "/") { req.url = "/dashboard" + q; return next(); }
+      if (path === "/") { req.url = req.originalUrl = "/dashboard" + q; return next(); }
       if (dashPath || BOTH_PATH.test(raw) || KEEP.has(seg(raw))) { if (!dashPath && !BOTH_PATH.test(raw)) return res.redirect(code, to(main, req)); return next(); }
-      req.url = "/dashboard" + raw + q; return next(); // a dashboard page shown without its "/dashboard" prefix
+      req.url = req.originalUrl = "/dashboard" + raw + q; return next(); // a dashboard page shown without its "/dashboard" prefix
     }
     if (host === main || host === "www." + main) { if (dashPath) return res.redirect(code, to(dash, req)); }
     next();

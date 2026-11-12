@@ -287,3 +287,11 @@ The README is now a setup guide: files to edit (with locations), Developer Porta
 
 ## v1.7.3
 - **Clean dashboard addresses.** On the dashboard host the `/dashboard` part is gone: `dashboard.autoauth.cfd/` is the home page and `dashboard.autoauth.cfd/alice/shop/setup` is a project page. Old `/dashboard/...` links redirect to the short form. Pages that share a name with a public page (`/dashboard/users`, `/dashboard/projects/...`) keep their full path.
+
+## v1.7.4
+- **Dashboard address conflicts fixed.** Two owner pages shared a name with public pages, so they could not have clean addresses on the dashboard host. They are renamed: `/dashboard/users` is now `/dashboard/authorized` and `/dashboard/projects` is now `/dashboard/side-projects`. The old addresses redirect to the new ones.
+- Sign-up handles can no longer be the name of a public page (`info`, `home`, `privacy-policy`, `stripe`, `report`, `optout`, `health`, `subscribe`, `assets`, `download` and similar) or of a dashboard page, since those would have been shadowed on the dashboard host.
+- Navigation highlighting, "back" redirects and the sign-in return address now work on the clean dashboard addresses.
+
+## v1.7.5
+- **Fallback for clashing handles.** A sign-up account that opens an owner-only dashboard page (an old `/dashboard/users` bookmark, or any owner page) is now sent to its own dashboard instead of a dead end. Accounts whose handle only clashes with a public page name (`info`, `home`, `stripe`, `report`...) keep working as they are. If a handle is exactly the name of an owner page (`authorized`, `side-projects`...), the account sees a short notice to contact support so the name can be changed; nothing is lost.

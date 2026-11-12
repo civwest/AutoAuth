@@ -70,14 +70,14 @@ function quickOptOut(){pickUser({title:'Opt out a user',desc:'Choose a user, the
 function quickOptOutAll(){closeAll();openDlg('dlg-optall');}
 function openOptOut(id){
  var u=userById(id);if(!u)return;
- $('oo-title').textContent='Opt out '+u.username;$('oo-form').action='/dashboard/users/'+id+'/optout';
+ $('oo-title').textContent='Opt out '+u.username;$('oo-form').action='/dashboard/authorized/'+id+'/optout';
  $('oo-info').textContent='Currently allowed: '+((u.server_authorized?'server joins':'')+(u.server_authorized&&u.dm_authorized?' and ':'')+(u.dm_authorized?'direct messages':'')||'nothing')+'.';
  $('oo-server').disabled=!u.server_authorized;$('oo-dm').disabled=!u.dm_authorized;
  closeAll();openDlg('dlg-optout');
 }
 function openExpiry(id){
  var u=userById(id);if(!u)return;
- $('ex-title').textContent='Edit expiry for '+u.username;$('ex-form').action='/dashboard/users/'+id+'/expiry';
+ $('ex-title').textContent='Edit expiry for '+u.username;$('ex-form').action='/dashboard/authorized/'+id+'/expiry';
  $('ex-current').textContent=u.auth_expires_at?('Current expiry: '+new Date(u.auth_expires_at).toUTCString()):'Current: never expires (until the user opts out).';
  $('ex-select').value='never';closeAll();openDlg('dlg-expiry');
 }
@@ -128,7 +128,7 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
     const can = (p) => perms.has(p);
     const a = (k, href, label) => `<a class="${tab === k ? "on" : ""}" href="${href}">${label}</a>`;
     return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AutoAuth Dashboard</title><script>try{if(localStorage.getItem("aa_side")==="0")document.documentElement.classList.add("sidecol");}catch(e){}</script><style>${CSS}${o ? siteMod.FOOTER_CSS : ""}</style></head><body><div id="toast" role="status"></div><button type="button" class="sidefab" id="sidefab" aria-label="Show sidebar" title="Show sidebar">☰</button><script>(function(){function set(c){document.documentElement.classList.toggle("sidecol",c);try{localStorage.setItem("aa_side",c?"0":"1");}catch(e){}}document.addEventListener("click",function(e){var t=e.target.closest&&e.target.closest("#sidetgl,#sidefab");if(t)set(t.id==="sidetgl");});})();</script><button type="button" class="navbtn" id="navbtn" aria-label="Menu" aria-expanded="false"><span></span></button><div class="navbg" id="navbg"></div><div class="layout"><aside class="side" id="side"><div class="brandrow"><div class="brand">◈ AutoAuth</div><button type="button" class="sidetgl" id="sidetgl" aria-label="Collapse sidebar" title="Collapse sidebar">‹</button></div><nav class="nav">
- ${o ? o.nav : `${can("bot") ? a("home", "/dashboard", "Bot Control") : ""}${can("users") ? a("db", "/dashboard/users", "Users") : ""}${can("servers") ? a("servers", "/dashboard/servers", "Servers") : ""}${can("dm") ? a("dm", "/dashboard/dm", "DM Users") : ""}${a("msg", "/channels/@me", "Messages")}${can("projects") ? a("projects", "/dashboard/projects", "Side Projects") + tree + a("support", "/dashboard/support", "Support") : ""}${can("logs") ? a("logs", "/dashboard/logs", "Logs") : ""}`}</nav><p class="muted" style="margin:28px 12px">Signed in as <a href="${o ? o.whoHref : "/users/profile"}" title="Open your profile" style="text-decoration:underline"><b>${esc(owner)}</b></a></p><form method="post" action="${o ? o.logout : "/dashboard/logout"}"><button class="secondary" style="width:100%">Log out</button></form>${o ? "" : `<a class="muted addbot" style="display:block;margin-top:14px;padding:6px 12px;text-decoration:underline" href="https://discord.com/oauth2/authorize?client_id=${esc(process.env.CLIENT_ID)}&amp;permissions=8&amp;integration_type=0&amp;scope=bot" target="_blank" rel="noopener">Add bot to server</a>`}</aside><script>(function(){var s=document.getElementById("side"),g=document.getElementById("navbg"),b=document.getElementById("navbtn");function t(o){s.classList.toggle("open",o);g.classList.toggle("open",o);b.setAttribute("aria-expanded",o?"true":"false");}b.addEventListener("click",function(){t(!s.classList.contains("open"));});g.addEventListener("click",function(){t(false);});s.addEventListener("click",function(e){if(e.target.closest("a"))t(false);});})();</script><main class="${offline() && ["servers", "dm", "roles"].includes(tab) ? "locked" : ""}">${content}${offline() && ["servers", "dm", "roles"].includes(tab) ? `<div class="fullov"><div class="fullbox"><h2 style="margin:0 0 6px">The bot is offline</h2><p class="muted" style="margin:0 0 14px">You have to start the bot first to use this page.</p><form method="post" action="/dashboard/discord/retry" style="margin:0"><button class="green" style="padding:12px 22px;font-size:16px">Start the bot</button></form></div></div>` : ""}</main></div>${o ? siteMod.footerHtml() : ""}<dialog id="dlg-msg" class="flash-dlg"><div class="dlg-top"><h2 id="msg-title" style="margin:0"></h2><button type="button" class="secondary" onclick="closeAll()">Close</button></div><p id="msg-text"></p></dialog><script>${CLIENT_JS}${flash ? `document.addEventListener("DOMContentLoaded",function(){showMsg("Done",${JSON.stringify(String(flash)).replace(/</g, "\\u003c")});});` : ""}</script></body></html>`;
+ ${o ? o.nav : `${can("bot") ? a("home", "/dashboard", "Bot Control") : ""}${can("users") ? a("db", "/dashboard/authorized", "Users") : ""}${can("servers") ? a("servers", "/dashboard/servers", "Servers") : ""}${can("dm") ? a("dm", "/dashboard/dm", "DM Users") : ""}${a("msg", "/channels/@me", "Messages")}${can("projects") ? a("projects", "/dashboard/projects", "Side Projects") + tree + a("support", "/dashboard/support", "Support") : ""}${can("logs") ? a("logs", "/dashboard/logs", "Logs") : ""}`}</nav><p class="muted" style="margin:28px 12px">Signed in as <a href="${o ? o.whoHref : "/users/profile"}" title="Open your profile" style="text-decoration:underline"><b>${esc(owner)}</b></a></p><form method="post" action="${o ? o.logout : "/dashboard/logout"}"><button class="secondary" style="width:100%">Log out</button></form>${o ? "" : `<a class="muted addbot" style="display:block;margin-top:14px;padding:6px 12px;text-decoration:underline" href="https://discord.com/oauth2/authorize?client_id=${esc(process.env.CLIENT_ID)}&amp;permissions=8&amp;integration_type=0&amp;scope=bot" target="_blank" rel="noopener">Add bot to server</a>`}</aside><script>(function(){var s=document.getElementById("side"),g=document.getElementById("navbg"),b=document.getElementById("navbtn");function t(o){s.classList.toggle("open",o);g.classList.toggle("open",o);b.setAttribute("aria-expanded",o?"true":"false");}b.addEventListener("click",function(){t(!s.classList.contains("open"));});g.addEventListener("click",function(){t(false);});s.addEventListener("click",function(e){if(e.target.closest("a"))t(false);});})();</script><main class="${offline() && ["servers", "dm", "roles"].includes(tab) ? "locked" : ""}">${content}${offline() && ["servers", "dm", "roles"].includes(tab) ? `<div class="fullov"><div class="fullbox"><h2 style="margin:0 0 6px">The bot is offline</h2><p class="muted" style="margin:0 0 14px">You have to start the bot first to use this page.</p><form method="post" action="/dashboard/discord/retry" style="margin:0"><button class="green" style="padding:12px 22px;font-size:16px">Start the bot</button></form></div></div>` : ""}</main></div>${o ? siteMod.footerHtml() : ""}<dialog id="dlg-msg" class="flash-dlg"><div class="dlg-top"><h2 id="msg-title" style="margin:0"></h2><button type="button" class="secondary" onclick="closeAll()">Close</button></div><p id="msg-text"></p></dialog><script>${CLIENT_JS}${flash ? `document.addEventListener("DOMContentLoaded",function(){showMsg("Done",${JSON.stringify(String(flash)).replace(/</g, "\\u003c")});});` : ""}</script></body></html>`;
   }
   function renderFor(req, res, tab, content, o) { const f = req.session.flash; delete req.session.flash; res.send(shell(tab, o.who, content, f, new Set(), o)); }
   async function render(req, res, tab, content) {
@@ -139,7 +139,7 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
   }
   const flash = (req, msg) => { req.session.flash = msg; };
   function back(req, def) {
-    try { const u = new URL(req.get("referer")); if (u.host === req.get("host") && u.pathname.startsWith("/dashboard")) return u.pathname + u.search; } catch {}
+    try { const u = new URL(req.get("referer")); if (u.host === req.get("host")) { let pn = u.pathname; if (!pn.startsWith("/dashboard") && !/^\/(login|signup|account|users)(\/|$)/.test(pn) && /^dashboard\./i.test(u.hostname)) pn = pn === "/" ? "/dashboard" : "/dashboard" + pn; if (pn.startsWith("/dashboard")) return pn + u.search; } } catch {}
     return def;
   }
 
@@ -182,7 +182,7 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
   <dialog id="dlg-optout"><div class="dlg-top"><h2 id="oo-title" style="margin:0"></h2>${x}</div><p class="muted" id="oo-info"></p>
    <form id="oo-form" method="post" onsubmit="return confirm('Are you sure?')"><div class="opt-actions"><button name="type" value="server" id="oo-server" class="danger">Opt out of server joins</button><button name="type" value="dm" id="oo-dm" class="danger">Opt out of DMs</button><button name="type" value="all" class="danger">Opt out of everything (delete data)</button></div></form></dialog>
   <dialog id="dlg-optall"><div class="dlg-top"><h2 style="margin:0">Opt out all users</h2>${x}</div>
-   <form method="post" action="/dashboard/users/optout-all" onsubmit="return confirm('Opt out ALL users? This cannot be undone.')"><div class="opt-actions"><button name="type" value="server" class="danger">Opt everyone out of server joins</button><button name="type" value="dm" class="danger">Opt everyone out of DMs</button><button name="type" value="all" class="danger">Opt everyone out of everything (delete data)</button></div></form></dialog>
+   <form method="post" action="/dashboard/authorized/optout-all" onsubmit="return confirm('Opt out ALL users? This cannot be undone.')"><div class="opt-actions"><button name="type" value="server" class="danger">Opt everyone out of server joins</button><button name="type" value="dm" class="danger">Opt everyone out of DMs</button><button name="type" value="all" class="danger">Opt everyone out of everything (delete data)</button></div></form></dialog>
   <dialog id="dlg-expiry"><div class="dlg-top"><h2 id="ex-title" style="margin:0"></h2>${x}</div><p class="muted" id="ex-current"></p>
    <form id="ex-form" method="post"><label>Expires after</label><select name="duration" id="ex-select">${EXPIRY.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select><button class="green">Save expiry</button></form></dialog>
   <dialog id="dlg-stream"><div class="dlg-top"><h2 style="margin:0">Streaming status</h2>${x}</div>
@@ -202,16 +202,16 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
     const p = req.path, perms = permsOf(req), has = (...l) => l.some((x) => perms.has(x));
     let ok = true;
     if (p === "/" || p.startsWith("/presence") || p === "/shutdown" || p === "/restart") ok = has("bot");
-    else if (p.startsWith("/users") || p.startsWith("/database")) ok = has("users");
+    else if (p.startsWith("/authorized") || p.startsWith("/users") || p.startsWith("/database")) ok = has("users");
     else if (/^\/servers\/[^/]+\/(addusers|kickusers|users\/)/.test(p)) ok = has("users", "bot", "servers");
     else if (p.startsWith("/servers")) ok = has("servers");
     else if (p === "/dm/send") ok = has("dm", "users");
     else if (p.startsWith("/dm")) ok = has("dm");
     else if (p.startsWith("/logs")) ok = has("logs");
-    else if (p.startsWith("/projects") || p.startsWith("/support")) ok = has("projects");
+    else if (p.startsWith("/side-projects") || p.startsWith("/projects") || p.startsWith("/support")) ok = has("projects");
     if (ok) return next();
     if (req.method === "GET" && p === "/") { // land on the first tab this admin may use
-      const first = [["users", "/dashboard/users"], ["servers", "/dashboard/servers"], ["dm", "/dashboard/dm"], ["projects", "/dashboard/projects"], ["logs", "/dashboard/logs"]].find(([k]) => perms.has(k));
+      const first = [["users", "/dashboard/authorized"], ["servers", "/dashboard/servers"], ["dm", "/dashboard/dm"], ["projects", "/dashboard/side-projects"], ["logs", "/dashboard/logs"]].find(([k]) => perms.has(k));
       return res.redirect(303, first ? first[1] : "/channels/@me");
     }
     if (req.method !== "GET" || (req.get("content-type") || "").includes("json")) return res.status(403).json({ error: "Your dashboard account does not have permission for that." });
@@ -268,8 +268,8 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
     const content2 = content + `<div class="card" style="margin-top:16px"><div class="top"><h2>Servers the bot is not in</h2><a class="btn secondary" href="/dashboard/servers?refresh=1">Refresh</a></div>${inner}</div>`;
     render(req, res, "servers", content2);
   });
-  app.get("/dashboard/database", (req, res) => res.redirect(301, "/dashboard/users"));
-  app.get("/dashboard/database/export.csv", (req, res) => res.redirect(301, "/dashboard/users/export.csv"));
+  app.get("/dashboard/database", (req, res) => res.redirect(301, "/dashboard/authorized"));
+  app.get("/dashboard/database/export.csv", (req, res) => res.redirect(301, "/dashboard/authorized/export.csv"));
 
   app.post("/dashboard/discord/retry", logged, verifyOrigin, async (req, res) => {
     if (client.isReady()) flash(req, "Already connected to Discord.");
@@ -329,7 +329,7 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
       await log("adduser_failed", { guild_id: guild.id, guild_name: guild.name, target_user_id: uid, error: e.message, source: "dashboard" }, req.session.owner);
       flash(req, `Could not add that user: ${String(e.message).slice(0, 120)}`);
     }
-    res.redirect(303, back(req, "/dashboard/users"));
+    res.redirect(303, back(req, "/dashboard/authorized"));
   });
   app.post("/dashboard/servers/:gid/users/:uid/kick", logged, verifyOrigin, async (req, res) => {
     const guild = getGuild(req, res); if (!guild) return;
@@ -408,7 +408,7 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
     try { await sendDmTo(uid, { content: `${OPTOUT_TEXT[type]}\n${url}` }); return "sent"; } catch { return "failed"; }
   }
   let optAll = null;
-  app.post("/dashboard/users/optout-all", logged, verifyOrigin, (req, res) => {
+  app.post("/dashboard/authorized/optout-all", logged, verifyOrigin, (req, res) => {
     const type = ["server", "dm", "all"].includes(req.body.type) ? req.body.type : "all";
     if (optAll && optAll.running) { flash(req, "An opt-out of all users is already running."); return res.redirect(303, back(req, "/dashboard")); }
     const by = req.session.owner;
@@ -433,7 +433,7 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
     flash(req, `Opting out all users (${type === "all" ? "everything" : type === "server" ? "server joins" : "direct messages"}) in the background. People who allowed DMs are messaged first. See Logs for the result.`);
     res.redirect(303, back(req, "/dashboard"));
   });
-  app.post("/dashboard/users/:id/optout", logged, verifyOrigin, async (req, res) => {
+  app.post("/dashboard/authorized/:id/optout", logged, verifyOrigin, async (req, res) => {
     const uid = String(req.params.id || ""); if (!validUid(uid)) return res.status(400).send("Invalid user ID.");
     const type = ["server", "dm", "all"].includes(req.body.type) ? req.body.type : "all";
     try {
@@ -445,7 +445,7 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
     } catch (e) { console.error("Dashboard opt-out failed", e); flash(req, "Opt-out failed. Check Render logs."); }
     res.redirect(303, back(req, "/dashboard"));
   });
-  app.post("/dashboard/users/:id/expiry", logged, verifyOrigin, async (req, res) => {
+  app.post("/dashboard/authorized/:id/expiry", logged, verifyOrigin, async (req, res) => {
     const uid = String(req.params.id || ""); if (!validUid(uid)) return res.status(400).send("Invalid user ID.");
     const d = String(req.body.duration || "never");
     if (d !== "never" && !Object.hasOwn(INTERVALS, d)) return res.status(400).send("Invalid duration.");
@@ -456,21 +456,21 @@ function dmToggleAll(el){[].slice.call(document.querySelectorAll('.dm-check')).f
       await log("expiry_changed", { target_user_id: uid, duration: d }, req.session.owner);
       flash(req, r.rows[0] ? `Expiry for ${r.rows[0].username} set to ${d === "never" ? "never" : INTERVALS[d] + " from now"}.` : "No record found for that user.");
     } catch (e) { console.error(e); flash(req, "Could not change the expiry."); }
-    res.redirect(303, back(req, "/dashboard/users"));
+    res.redirect(303, back(req, "/dashboard/authorized"));
   });
 
   // ---------- Database ----------
-  app.get("/dashboard/users", logged, async (req, res) => {
+  app.get("/dashboard/authorized", logged, async (req, res) => {
     try {
       const q = String(req.query.q || "").slice(0, 100);
       const [r, tot] = await Promise.all([pool.query("SELECT user_id,username,authorized_at,server_authorized,dm_authorized,auth_expires_at FROM authorized_users WHERE user_id ILIKE $1 OR username ILIKE $1 ORDER BY authorized_at DESC LIMIT 300", [`%${q}%`]), pool.query("SELECT COUNT(*)::int n FROM authorized_users")]);
       const access = (u) => (u.server_authorized ? '<span class="badge">Servers</span>' : "") + (u.dm_authorized ? '<span class="badge dm">DMs</span>' : "") || '<span class="badge none">None</span>';
       const expires = (u) => !u.auth_expires_at ? "Never" : isExpired(u) ? `<span style="color:#ff938a">Expired ${ts(u.auth_expires_at)}</span>` : ts(u.auth_expires_at);
-      const content = `<div class="top"><div><h1>Users</h1><p class="muted">Showing ${r.rows.length} of ${tot.rows[0].n}.</p></div><a class="btn secondary" href="/dashboard/users/export.csv">Export CSV</a></div><div class="card"><form class="row" method="get"><div><label>Search username or Discord ID</label><input name="q" value="${esc(q)}"></div><div><button>Search</button></div></form><div class="wrap"><table class="stack"><tr><th>Username</th><th>Discord ID</th><th>Access</th><th>Authorized at (UTC)</th><th>Expires (UTC)</th><th style="text-align:right">Actions</th></tr>${r.rows.map((u) => `<tr><td data-l="Username">${esc(u.username)}</td><td data-l="Discord ID">${esc(u.user_id)}</td><td data-l="Access">${access(u)}</td><td data-l="Authorized at (UTC)">${ts(u.authorized_at)}</td><td data-l="Expires (UTC)">${expires(u)}</td><td class="actcell"><div class="acts"><button type="button" class="secondary" onclick="openExpiry('${esc(u.user_id)}')">Edit expiry</button><button type="button" class="green" onclick="addToServer('${esc(u.user_id)}')"${u.server_authorized && !offline() ? "" : " disabled"}${offline() ? " title=\"Start the bot first\"" : ""}>Add to server</button>${u.dm_authorized ? `<button type="button" onclick="openDm(['${esc(u.user_id)}'],'${esc(u.username).replace(/'/g, "&#39;")}')">DM</button>` : ""}<button type="button" class="danger" onclick="openOptOut('${esc(u.user_id)}')">Opt out</button></div></td></tr>`).join("") || "<tr><td colspan=6>No records.</td></tr>"}</table></div></div>${popups(r.rows.map(userRow))}<p class="notice">Opt out lets you turn off server joins, DMs, or everything. Opting out of everything revokes the grant with Discord and deletes the record; nobody is removed from servers. Expiry defaults to Never: tokens refresh automatically and stay valid until the user opts out. The CSV contains usernames, IDs, access and dates only, never tokens.</p>`;
+      const content = `<div class="top"><div><h1>Users</h1><p class="muted">Showing ${r.rows.length} of ${tot.rows[0].n}.</p></div><a class="btn secondary" href="/dashboard/authorized/export.csv">Export CSV</a></div><div class="card"><form class="row" method="get"><div><label>Search username or Discord ID</label><input name="q" value="${esc(q)}"></div><div><button>Search</button></div></form><div class="wrap"><table class="stack"><tr><th>Username</th><th>Discord ID</th><th>Access</th><th>Authorized at (UTC)</th><th>Expires (UTC)</th><th style="text-align:right">Actions</th></tr>${r.rows.map((u) => `<tr><td data-l="Username">${esc(u.username)}</td><td data-l="Discord ID">${esc(u.user_id)}</td><td data-l="Access">${access(u)}</td><td data-l="Authorized at (UTC)">${ts(u.authorized_at)}</td><td data-l="Expires (UTC)">${expires(u)}</td><td class="actcell"><div class="acts"><button type="button" class="secondary" onclick="openExpiry('${esc(u.user_id)}')">Edit expiry</button><button type="button" class="green" onclick="addToServer('${esc(u.user_id)}')"${u.server_authorized && !offline() ? "" : " disabled"}${offline() ? " title=\"Start the bot first\"" : ""}>Add to server</button>${u.dm_authorized ? `<button type="button" onclick="openDm(['${esc(u.user_id)}'],'${esc(u.username).replace(/'/g, "&#39;")}')">DM</button>` : ""}<button type="button" class="danger" onclick="openOptOut('${esc(u.user_id)}')">Opt out</button></div></td></tr>`).join("") || "<tr><td colspan=6>No records.</td></tr>"}</table></div></div>${popups(r.rows.map(userRow))}<p class="notice">Opt out lets you turn off server joins, DMs, or everything. Opting out of everything revokes the grant with Discord and deletes the record; nobody is removed from servers. Expiry defaults to Never: tokens refresh automatically and stay valid until the user opts out. The CSV contains usernames, IDs, access and dates only, never tokens.</p>`;
       render(req, res, "db", content);
     } catch (e) { console.error(e); res.status(500).send("Database view failed."); }
   });
-  app.get("/dashboard/users/export.csv", logged, async (req, res) => {
+  app.get("/dashboard/authorized/export.csv", logged, async (req, res) => {
     try {
       const r = await pool.query("SELECT user_id,username,authorized_at,server_authorized,dm_authorized,auth_expires_at FROM authorized_users ORDER BY authorized_at DESC");
       const cell = (v) => { let t = String(v ?? ""); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return '"' + t.replace(/"/g, '""') + '"'; };

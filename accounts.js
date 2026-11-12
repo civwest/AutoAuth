@@ -3,7 +3,12 @@
 const crypto = require("node:crypto");
 const { weakPassword } = require("./security");
 
-const RESERVED = new Set(["users", "servers", "dm", "logs", "projects", "support", "messages", "discord", "database", "presence", "shutdown", "restart", "roles", "admin", "login", "logout", "signup", "account", "api", "oauth", "auth", "channels", "profile", "static", "public"]);
+// Names that cannot be sign-up handles. PAGE_NAMES are real owner-dashboard pages; SOFT_NAMES only clash with public pages, so an
+// account that already has one of them as its handle keeps working (see acctOnly) instead of being shadowed.
+const PAGE_NAMES = ["users", "servers", "dm", "logs", "projects", "support", "messages", "discord", "database", "presence", "shutdown", "restart", "authorized", "side-projects", "roles", "admin", "login", "logout", "signup", "account", "api", "oauth", "auth", "channels", "profile", "static", "public"];
+const SOFT_NAMES = ["members", "dashboard", "info", "home", "tos", "terms-of-service", "privacy-policy", "stripe", "report", "optout", "health", "subscribe", "assets", "favicon.ico", "robots.txt", "drive-logo", ".well-known", "download"];
+const RESERVED = new Set([...PAGE_NAMES, ...SOFT_NAMES]);
+const OWNER_PAGE = new Set(PAGE_NAMES);
 const NAME = /^[a-z0-9](?:[a-z0-9-]{1,18}[a-z0-9])$/;
 
 const HINT = {
@@ -134,15 +139,16 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
   }
 
   // ---------- helpers for dashboards ----------
-  // The main dashboard's own projects use the same per-project pages at /dashboard/projects/<name>/<tab>.
-  // They are shown with a stand-in account: its handle is "projects" and its project names are not prefixed.
-  const OWNER_CTX = { owner: true, id: "0", username: "projects", pfx: 0 };
+  // The main dashboard's own projects use the same per-project pages at /dashboard/side-projects/<name>/<tab>.
+  // They are shown with a stand-in account: its handle is "side-projects" and its project names are not prefixed.
+  const OWNER_CTX = { owner: true, id: "0", username: "side-projects", pfx: 0 };
   const acctOnly = async (req, res, next) => {
-    if (req.params.u === "projects" && req.params.name) {
+    if (req.params.u === "side-projects" && req.params.name) {
       if (!ownerOk(req)) return next("route");
       req.acct = OWNER_CTX; req.navProjects = []; return next();
     }
-    if (RESERVED.has(req.params.u)) return next("route"); // /dashboard/dm, /dashboard/users... belong to the main dashboard
+    const sa = req.session && req.session.acct;
+    if (RESERVED.has(req.params.u) && !(SOFT_NAMES.includes(req.params.u) && sa && sa.username === req.params.u)) return next("route"); // /dashboard/dm, /dashboard/authorized... belong to the main dashboard
     const s = req.session && req.session.acct;
     if (!s) return res.redirect(303, "/signup");
     if (req.session.acctFp !== fp(req)) return req.session.destroy(() => res.redirect(303, "/signup"));
@@ -161,7 +167,7 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
   // Sidebar tree of the main dashboard's own projects.
   async function ownerTree(req) {
     const rows = (await pool.query("SELECT slug,name,type,config FROM side_projects WHERE owner_account IS NULL ORDER BY created_at DESC")).rows;
-    return navtree.tree(rows.map((p) => ({ name: p.name, base: `/dashboard/projects/${p.slug}`, tabs: projTabs(p) })), navtree.hereOf(req), esc);
+    return navtree.tree(rows.map((p) => ({ name: p.name, base: `/dashboard/side-projects/${p.slug}`, tabs: projTabs(p) })), navtree.hereOf(req), esc);
   }
 
   function mountDash({ app, renderFor, render: renderOwner, verifyOrigin, sendDm }) {
@@ -239,7 +245,7 @@ module.exports = function createAccounts({ pool, enc, dec, log, express, project
     const sub = (a, p, tab) => {
       const stores = p.type === "oauth" && (p.config || {}).store;
       const t = (k, l) => `<a class="btn ${tab === k ? "" : "secondary"}" href="/dashboard/${a.username}/${esc(p.slug.slice(a.pfx))}/${k}">${l}</a>`;
-      return `<div class="top"><div><a class="muted" href="${a.owner ? "/dashboard/projects" : `/dashboard/${a.username}`}">← ${a.owner ? "Side Projects" : "Projects"}</a><h1 style="margin:6px 0">${esc(p.name)}</h1><div class="chips"><span class="chip">${esc((projects.TYPES[p.type] || {}).label || p.type)}</span>${stores ? `<span class="chip">Stores data in ${(p.config || {}).storage === "drive" ? "Google Drive" : "our database"}</span>` : ""}${p.locked ? '<span class="chip warn">Locked</span>' : ""}</div>${HINT[tab.split("/")[0]] ? `<p class="hint">${HINT[tab.split("/")[0]]}</p>` : ""}</div><div class="row" style="gap:8px;flex-wrap:wrap">${projTabs(p).map(([k, l]) => t(k, l)).join("")}</div></div>${p.locked ? '<div class="card" style="border-color:#e0556a"><b>This project is locked.</b> Check Support for details.</div>' : ""}`;
+      return `<div class="top"><div><a class="muted" href="${a.owner ? "/dashboard/side-projects" : `/dashboard/${a.username}`}">← ${a.owner ? "Side Projects" : "Projects"}</a><h1 style="margin:6px 0">${esc(p.name)}</h1><div class="chips"><span class="chip">${esc((projects.TYPES[p.type] || {}).label || p.type)}</span>${stores ? `<span class="chip">Stores data in ${(p.config || {}).storage === "drive" ? "Google Drive" : "our database"}</span>` : ""}${p.locked ? '<span class="chip warn">Locked</span>' : ""}</div>${HINT[tab.split("/")[0]] ? `<p class="hint">${HINT[tab.split("/")[0]]}</p>` : ""}</div><div class="row" style="gap:8px;flex-wrap:wrap">${projTabs(p).map(([k, l]) => t(k, l)).join("")}</div></div>${p.locked ? '<div class="card" style="border-color:#e0556a"><b>This project is locked.</b> Check Support for details.</div>' : ""}`;
     };
     app.get("/dashboard/:u/:name/setup", acctOnly, async (req, res) => {
       const p = await own(req.acct, req.params.name); if (!p) return res.status(404).send("Not found");
@@ -416,5 +422,5 @@ poll();setInterval(poll,4000);})();`;
   // Signed-in accounts that open /dashboard land on their own dashboard.
   const landing = (req) => (req.session && req.session.acct && !req.session.owner ? "/dashboard/" + req.session.acct.username : null);
 
-  return { drive, ownerTree, projTabs, social, socialButtons, accountDiscord, accountLogin, passwordLogin, start, finishLogin, authPage, discordLink, mountPublic, mountDash, mountAdmin, landing };
+  return { OWNER_PAGE, drive, ownerTree, projTabs, social, socialButtons, accountDiscord, accountLogin, passwordLogin, start, finishLogin, authPage, discordLink, mountPublic, mountDash, mountAdmin, landing };
 };

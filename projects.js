@@ -236,13 +236,13 @@ async function spDelete(n){var p=SP.projects[n];if(!confirm('Delete '+p.name+'?'
       if (!drive || !drive.on()) throw new Error("Google Drive is not set up on this site yet.");
       if (!(await drive.linkOf("o:" + req.session.owner))) throw new Error("Connect Google Drive on your profile page first, then pick it here.");
     };
-    app.get("/dashboard/projects", logged, async (req, res) => {
+    app.get("/dashboard/side-projects", logged, async (req, res) => {
       const rows = (await pool.query("SELECT p.slug,p.name,p.type,p.config,p.created_at,(SELECT COUNT(*)::int FROM side_project_users u WHERE u.slug=p.slug) AS users FROM side_projects p WHERE p.owner_account IS NULL ORDER BY p.created_at DESC")).rows;
-      const content = editor(rows, "/dashboard/projects", esc, { extra: (p) => `<a class="btn secondary" href="/dashboard/projects/${esc(p.slug)}/setup">Open</a><button type="button" class="secondary" hidden data-close="/dashboard/projects/${esc(p.slug)}" onclick="aaClose(this.dataset.close)">Close</button>` });
+      const content = editor(rows, "/dashboard/side-projects", esc, { extra: (p) => `<a class="btn secondary" href="/dashboard/side-projects/${esc(p.slug)}/setup">Open</a><button type="button" class="secondary" hidden data-close="/dashboard/side-projects/${esc(p.slug)}" onclick="aaClose(this.dataset.close)">Close</button>` });
       render(req, res, "projects", content);
     });
 
-    app.post("/dashboard/projects", logged, verifyOrigin, express.json({ limit: "100kb" }), async (req, res) => {
+    app.post("/dashboard/side-projects", logged, verifyOrigin, express.json({ limit: "100kb" }), async (req, res) => {
       const b = req.body || {}, name = String(b.name || "").trim().slice(0, 40), type = String(b.type || "");
       const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
       if (!TYPES[type]) return res.status(400).json({ error: "Choose what the project is for." });
@@ -255,7 +255,7 @@ async function spDelete(n){var p=SP.projects[n];if(!confirm('Delete '+p.name+'?'
       } catch (e) { res.status(e.code === "23505" ? 409 : 400).json({ error: e.code === "23505" ? "A project with that name already exists." : e.message }); }
     });
 
-    app.post("/dashboard/projects/:slug", logged, verifyOrigin, express.json({ limit: "100kb" }), async (req, res) => {
+    app.post("/dashboard/side-projects/:slug", logged, verifyOrigin, express.json({ limit: "100kb" }), async (req, res) => {
       const p = (await pool.query("SELECT slug,type,config FROM side_projects WHERE slug=$1 AND owner_account IS NULL", [String(req.params.slug)])).rows[0];
       if (!p) return res.status(404).json({ error: "Project not found." });
       try {
@@ -266,7 +266,7 @@ async function spDelete(n){var p=SP.projects[n];if(!confirm('Delete '+p.name+'?'
       } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
-    app.post("/dashboard/projects/:slug/delete", logged, verifyOrigin, async (req, res) => {
+    app.post("/dashboard/side-projects/:slug/delete", logged, verifyOrigin, async (req, res) => {
       const slug = String(req.params.slug);
       await pool.query("DELETE FROM side_projects WHERE slug=$1 AND owner_account IS NULL", [slug]);
       await pool.query("DELETE FROM side_project_users WHERE slug=$1 AND NOT EXISTS(SELECT 1 FROM side_projects WHERE slug=$1)", [slug]);

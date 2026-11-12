@@ -20,7 +20,8 @@ const PgSession = require("connect-pg-simple")(session);
 app.set("trust proxy", 1);
 const {createSecurity,totpVerify}=require("./security");
 const security=createSecurity({log}); security.mount(app); // rate limiter, headers, host check, cross-site POST block
-const hosts=require("./hosts")(); app.use(hosts.middleware); // dashboard on its own subdomain when DASHBOARD_HOST is set
+const hosts=require("./hosts")(); app.use(hosts.middleware);
+app.get(/^\/dashboard\/(users|projects|database)(\/.*)?$/,(req,res)=>res.redirect(301,"/dashboard/"+(req.params[0]==="projects"?"side-projects":"authorized")+(req.params[1]||"")+(req.url.includes("?")?"?"+req.url.split("?").slice(1).join("?"):""))); // old names of the renamed pages // dashboard on its own subdomain when DASHBOARD_HOST is set
 app.use(express.urlencoded({ extended: false, limit: "20kb" }));
 app.use(session({ name:"autoauth.sid", secret:process.env.SESSION_SECRET, resave:false, saveUninitialized:false, rolling:false,
   store:new PgSession({ pool, tableName:"dashboard_sessions", createTableIfMissing:true, ttl:2*60*60 }),
@@ -353,6 +354,13 @@ const billing=require("./billing")({pool,log,esc,origin:()=>{try{return new URL(
 const pdata=require("./pdata")({pool,enc,dec,log,express,esc,site,drive,origin:()=>{try{return new URL(process.env.REDIRECT_URI).origin;}catch{return "";}}});
 const projects=require("./projects")({pool,enc,dec,log,express,collect:pdata.collect,dataScopes:pdata.DATA_SCOPES,limits:billing,drive}); projects.mountPublic({app,site}); // /projects/<name>/... and /projects/<user>/<name>/...
 const accounts=require("./accounts")({pool,enc,dec,log,express,projects,pdata,ownerIdent,twofa,drive,billing,site,esc,isOwnerName:u=>owners.some(o=>o.user.toLowerCase()===String(u).toLowerCase()),ownerOk:req=>{const o=req.session&&req.session.owner&&owners.find(x=>x.user===req.session.owner);return !!(o&&o.perms&&o.perms.has("projects")&&req.session.deviceFingerprint&&equal(req.session.deviceFingerprint,deviceFingerprint(req)));}}); accounts.mountPublic(app);
+// Fallback: a sign-up account that opens an owner-only page (an old bookmark, or a handle that clashes with one) is taken to its own dashboard.
+app.get(/^\/dashboard\/([^\/?]+)/,(req,res,next)=>{
+ let seg=""; try{seg=decodeURIComponent(req.params[0]).toLowerCase();}catch{return next();}
+ const a=req.session&&req.session.acct; if(!accounts.OWNER_PAGE.has(seg)||req.session.owner||!a) return next();
+ if(a.username!==seg) return res.redirect(303,"/dashboard/"+a.username);
+ res.status(409).send(site.page("Handle conflict",`<h1>Your handle clashes with a dashboard page</h1><p>Your sign-up name <b>${esc(a.username)}</b> is now the name of a page on this site, so your dashboard cannot open at its usual address. Your projects and data are safe. Please contact support so the name can be changed.</p><p><a href="/account/logout">Sign out</a></p>`,""));
+});
 require("./auth")(app,{site,pool,enc,log,equal,verifyOrigin,optOutUser,dashDiscord,accountDiscord:accounts.accountDiscord,accountLogin:accounts.accountLogin,loginRedirect:LOGIN_REDIRECT}); // /auth, /auth/start, /oauth/callback
 
 const DISCORD_PATH=require("./icons").discord;
